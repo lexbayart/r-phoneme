@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="ru">
+<!--
+================================================================================
+  R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
+  Version: 3.3  |  Last updated: 2026-06-26
+================================================================================
+
+  HOW TO NAVIGATE THIS FILE
+  --------------------------
+  Every section is tagged with a unique marker.
+  Use Ctrl+F (or Cmd+F) to jump directly to any section.
+
+  Search format:  [TAG:SECTION_NAME]
+  End of section: [END:SECTION_NAME]
+
+================================================================================
+  RULES FOR DEVELOPERS — KEEPING THE INDEX IN SYNC WITH CODE
+================================================================================
+
+  These rules are MANDATORY. The index must always reflect the actual code.
+  A stale index is worse than no index.
+
+  RULE 1 — ADDING A NEW SECTION
+  ───────────────────────────────
+  When you add a new block of logic (new feature, new UI section, new helper):
+
+  a) Choose a tag name: [TAG:JS-FEATURENAME] or [TAG:CSS-FEATURENAME] or [TAG:HTML-FEATURENAME]
+     Naming convention:
+       JS-   for JavaScript logic
+       CSS-  for stylesheet rules
+       HTML- for markup structure
+
+  b) Wrap the section in the code:
+       // [TAG:JS-FEATURENAME] ─────────────────────────────────────────────
+       // Brief one-line description of what this section does.
+       <your code here>
+       // [END:JS-FEATURENAME]
+
+  c) Add the tag to the SECTION INDEX in this doc block (top of file).
+     Format:
+       [TAG:JS-FEATURENAME]       Short description of the section
+
+  d) If the section has tuneable constants, add them to KEY CONSTANTS.
+
+  RULE 2 — MODIFYING AN EXISTING SECTION
+  ────────────────────────────────────────
+  a) Keep the existing [TAG:...] and [END:...] markers intact.
+  b) Update the description comment next to the tag if the behavior changed.
+  c) Add a CHANGELOG entry at the top of this doc block:
+       vX.Y (YYYY-MM-DD)
+         - CHANGED: What changed and why   [TAG:JS-FEATURENAME]
+
+  RULE 3 — REMOVING A SECTION
+  ─────────────────────────────
+  a) Remove the code AND the [TAG:...] / [END:...] markers.
+  b) Remove the line from the SECTION INDEX.
+  c) Remove the line from KEY CONSTANTS if applicable.
+  d) Add a CHANGELOG entry:
+       vX.Y (YYYY-MM-DD)
+         - REMOVED: What was removed and why
+
+  RULE 4 — REVERTING A CHANGE
+  ─────────────────────────────
+  a) Remove the reverted code completely. Do not leave it commented out.
+  b) Add to KNOWN CONSTRAINTS section:
+       ✗ FeatureName
+           Tried: brief description of the approach
+           Result: why it didn't work
+           Status: REVERTED in vX.Y
+  c) Update CHANGELOG with REVERTED entry.
+
+  RULE 5 — VERSIONING
+  ─────────────────────
+  Bump the version number at the top of this doc block on every change.
+  Format: vMAJOR.MINOR
+    MAJOR — significant architecture change (new panels, new pipeline)
+    MINOR — parameter tuning, bug fixes, adding/removing small features
+  Always add a CHANGELOG entry with the date.
+
+  RULE 6 — CRITICAL LOAD ORDER (DO NOT CHANGE)
+  ──────────────────────────────────────────────
+  The three script blocks must appear in this exact order:
+    1. <script> var Module = { onRuntimeInitialized: ... } </script>
+    2. <script src="edge-impulse-standalone.js"></script>
+    3. <script> class EdgeImpulseClassifier ... main app logic </script>
+  Reason: Edge Impulse calls run() synchronously at end of block 2,
+  which fires onRuntimeInitialized. Block 1 must pre-declare it.
+
+================================================================================
+  CHANGELOG
+================================================================================
+
+  v3.3 (2026-06-26)
+    - FIXED:   Module not defined error — pre-declare var Module before JS load  [RULE 6]
+    - ADDED:   Developer rules for maintaining code index (RULES 1–6 above)
+
+  v3.2 (2026-06-26)
+    - ADDED:   Preset buttons (5 configs, auto-apply to sliders)  [TAG:JS-PRESETS]
+    - ADDED:   Mode toggle buttons (continuous / separate «р»)     [TAG:JS-MODE]
+    - ADDED:   Right panel: real-time sliders for all key params   [TAG:HTML-SETTINGS-PANEL]
+    - ADDED:   Left panel: timestamped inference log + copy btn    [TAG:HTML-LOG-PANEL]
+    - REMOVED: Stats table (analysis done externally via log copy)
+    - CHANGED: Default threshold 0.80 → 0.60                      [TAG:JS-INFERENCE]
+    - CHANGED: Default audio scale 32768 → 48000                  [TAG:JS-INFERENCE]
+    - CHANGED: Default inference interval 200ms → 50ms            [TAG:JS-INFERENCE]
+
+  v3.1 (2026-06-26)
+    - TRIED & REVERTED: Peak normalization (TARGET_PEAK=24000) — degraded detection
+    - TRIED & REVERTED: RMS normalization (TARGET=8000) — degraded detection
+
+  v3.0 (2026-06-25)
+    - ADDED: Debug panel layout (3-column: log | app | settings)
+    - ADDED: Mic level bar, per-class confidence bars
+
+  v1.0 (2026-06-24)
+    - Initial working version: ring buffer + setInterval classify
+
+================================================================================
+  ARCHITECTURE OVERVIEW
+================================================================================
+
+  Single self-contained HTML file.
+
+  External dependencies (must be in the same folder):
+    edge-impulse-standalone.js   — Edge Impulse compiled model (JS loader)
+    edge-impulse-standalone.wasm — Edge Impulse WASM binary
+
+  Run locally:
+    cd <folder> && python3 -m http.server 8082
+    Open: http://localhost:8082/r-detector.html
+
+  Layout: 3-column flex row
+    ┌──────────────┬──────────────────┬──────────────┐
+    │  LOG PANEL   │    MAIN APP      │   SETTINGS   │
+    │  (280px)     │   (flex: 1)      │   (260px)    │
+    │              │                  │              │
+    │ timestamped  │ indicator circle │ presets      │
+    │ inference    │ confidence bars  │ sliders      │
+    │ log          │ mic level        │ normalization│
+    │ copy button  │ start/stop       │ copy config  │
+    └──────────────┴──────────────────┴──────────────┘
+
+  Audio pipeline:
+    getUserMedia
+      → ScriptProcessorNode (bufferSize: 4096)
+      → resample (native rate → 16000 Hz, linear interpolation)
+      → ring buffer (16000 samples = 1 second window)
+      → setTimeout every N ms:
+          unwrap ring buffer → Float32Array(16000)
+          → multiply by AUDIO_SCALE (float32 [-1,1] → int16 range)
+          → [optional: peak normalization if enabled via slider]
+          → classifier.classify(window)
+          → renderResult()
+
+  Model details:
+    Framework:   Edge Impulse (compiled to WASM)
+    DSP:         MFE (Mel Filterbank Energy) — runs INSIDE WASM
+    Sample rate: 16000 Hz
+    Window:      1000 ms = 16000 samples
+    Classes:     r | noise | unknown
+    Input:       Float32Array of 16000 samples in int16 amplitude range
+
+================================================================================
+  SECTION INDEX  (Ctrl+F the tag to jump there)
+================================================================================
+
+  CSS
+  ───
+  [TAG:CSS-VARIABLES]        Theme colors and design tokens (:root)
+  [TAG:CSS-LAYOUT]           Body, .layout, panel sizing
+  [TAG:CSS-INDICATOR]        Circle detection indicator
+  [TAG:CSS-BARS]             Per-class confidence bar rows
+  [TAG:CSS-MIC-LEVEL]        Microphone level strip
+  [TAG:CSS-BUTTONS]          Start/Stop button styles
+  [TAG:CSS-STATUS]           Status and debug text lines
+  [TAG:CSS-MODE-BUTTONS]     Continuous / Separate mode toggle buttons
+  [TAG:CSS-PRESET-BUTTONS]   Preset button list styles
+  [TAG:CSS-SETTINGS-PANEL]   Right panel: sliders, labels, copy button
+  [TAG:CSS-LOG-PANEL]        Left panel: log rows, colors, scroll
+
+  HTML
+  ────
+  [TAG:HTML-LOG-PANEL]       Left column — inference log + copy/clear buttons
+  [TAG:HTML-MAIN-PANEL]      Center column — indicator, bars, mic, start/stop
+  [TAG:HTML-SETTINGS-PANEL]  Right column — mode buttons, presets, sliders
+
+  JAVASCRIPT
+  ──────────
+  [TAG:JS-CLASSIFIER]        EdgeImpulseClassifier class (run-impulse.js inlined)
+  [TAG:JS-SETTINGS]          getSettings(), slider value bindings
+  [TAG:JS-PRESETS]           PRESETS array definition + applyPreset()
+  [TAG:JS-MODE]              setMode() — continuous/separate toggle
+  [TAG:JS-LOG]               addLog(), copy log, clear log
+  [TAG:JS-MODEL-INIT]        Model init, getProperties(), debug line
+  [TAG:JS-BARS]              buildBars(), renderResult() — UI update per frame
+  [TAG:JS-RESAMPLE]          resample() — linear interpolation, native→16kHz
+  [TAG:JS-AUDIO]             getUserMedia, AudioContext, ScriptProcessorNode
+  [TAG:JS-RINGBUFFER]        Ring buffer write (inside onaudioprocess)
+  [TAG:JS-INFERENCE]         Inference loop — unwrap, scale, normalize, classify
+  [TAG:JS-START-STOP]        startListening(), stopListening()
+
+================================================================================
+  KEY CONSTANTS & TUNABLES
+================================================================================
+
+  All tuneable at runtime via sliders. Defaults listed below.
+
+  THRESHOLD    = 0.60   Min confidence for class 'r' to trigger detection
+                        Slider range: 0.50–0.95  Step: 0.01
+                        History: started at 0.80, lowered after log analysis
+
+  AUDIO_SCALE  = 48000  Multiplier: float32 → int16 amplitude range
+                        Slider range: 8000–65536  Step: 1000
+                        Note: model trained on int16 PCM; Web Audio gives float32 [-1,1]
+                        History: started at 32768, raised to 48000 after log analysis
+
+  INTERVAL_MS  = 50     How often inference runs (ms)
+                        Slider range: 50–500  Step: 50
+                        Lower = more detection attempts per second
+
+  NORM_ENABLED = false  Peak normalization toggle
+                        When ON: divides window by peak amplitude, multiplies by NORM_TARGET
+                        Only applied if peak > NORM_MIN
+
+  NORM_TARGET  = 16000  Target peak amplitude when normalization is ON
+  NORM_MIN     = 500    Minimum peak below which normalization is skipped (silence guard)
+
+================================================================================
+  KNOWN CONSTRAINTS — DO NOT REVERT
+================================================================================
+
+  ✗ classifyContinuous()
+      Tried: using WASM run_classifier_continuous() with slice-based feeding
+      Result: WASM internal buffer misbehaved, always returned noise
+      Status: REMOVED — use classify() on full 1-second window only
+
+  ✗ noiseSuppression: true / autoGainControl: true in getUserMedia
+      Result: distorts signal, breaks detection
+      Status: hardcoded to false, do not change
+
+  ✗ Feeding float32 without ×AUDIO_SCALE
+      Result: model always outputs noise (expects int16 amplitude range)
+      Status: scaling is mandatory
+
+  ✗ Multi-frame smoothing (require N consecutive detections)
+      Result: adds perceptible delay, rejected by user
+      Status: will not implement
+
+  ✗ RMS normalization (TARGET=8000)
+      Tried: compute window RMS, scale to target
+      Result: degraded detection for both quiet and loud speech
+      Status: REVERTED in v3.1
+
+  ✗ Peak normalization (TARGET_PEAK=24000)
+      Tried: scale window so max absolute value = TARGET_PEAK
+      Result: degraded detection, especially for loud speech
+      Status: REVERTED in v3.1
+
+================================================================================
+-->
+<!--
+================================================================================
+  AI INSTRUCTIONS FOR CLAUDE SONNET 4.6
+  Read this block first before doing anything else with this file.
+================================================================================
+
+  CONTEXT
+  ───────
+  This is a single HTML file — Russian rolled «Р» sound detector.
+  No API integrations. No build system. No package manager.
+  User delivers this file directly in chat and asks for changes.
+  You edit it and return it. That's the entire workflow.
+
+  HOW THE USER WORKS WITH YOU
+  ────────────────────────────
+  1. User drops the HTML file in chat + describes what to change
+  2. You read the file, make changes, return the file
+  3. User tests locally (python3 -m http.server 8082)
+  4. User pastes log output back to you for analysis
+  5. Repeat
+
+  You never need API keys, servers, npm, or any external tools.
+  The only external files are edge-impulse-standalone.js and .wasm
+  (same folder, never touched by you).
+
+================================================================================
+  HOW TO EDIT THIS FILE — YOUR RULES
+================================================================================
+
+  RULE A — READ BEFORE WRITING
+  ──────────────────────────────
+  Before changing anything:
+  1. Read the SECTION INDEX to locate the relevant [TAG:...]
+  2. Read KNOWN CONSTRAINTS — do not re-implement anything listed there
+  3. Read CHANGELOG — understand what already changed and why
+  Never assume the file matches what you remember from earlier in the conversation.
+  The user may have edited it manually. Always work from the file as given.
+
+  RULE B — ONE CHANGE AT A TIME
+  ───────────────────────────────
+  Make the smallest possible change that achieves the goal.
+  Do not refactor unrelated sections. Do not rename variables.
+  Do not reformat code you are not changing.
+  Surgical edits only. This prevents accidental breakage.
+
+  RULE C — CRITICAL SCRIPT LOAD ORDER (NEVER CHANGE)
+  ────────────────────────────────────────────────────
+  The file has exactly THREE script blocks in this order:
+
+    Block 1: <script> var Module = { onRuntimeInitialized: ... } </script>
+    Block 2: <script src="edge-impulse-standalone.js"></script>
+    Block 3: <script> EdgeImpulseClassifier class + all app logic </script>
+
+  WHY: edge-impulse-standalone.js calls run() synchronously at the end.
+  run() fires onRuntimeInitialized immediately. Block 1 must pre-declare
+  it. If you set onRuntimeInitialized in Block 3, you get:
+    "Uncaught ReferenceError: Module is not defined"
+  Do not merge, reorder, or move code between these blocks.
+
+  RULE D — INFERENCE LOOP IS IN A setTimeout CHAIN
+  ──────────────────────────────────────────────────
+  The inference loop uses recursive setTimeout, NOT setInterval.
+  See [TAG:JS-INFERENCE]. The interval value is read live from the
+  slider each cycle — this is intentional so the user can change it
+  without stopping. Do not convert to setInterval.
+  The timer handle is stored in `inferenceTimer`. Set it to null
+  to stop the chain (checked at top of each cycle).
+
+  RULE E — ALL TUNEABLES ARE READ LIVE FROM getSettings()
+  ─────────────────────────────────────────────────────────
+  See [TAG:JS-SETTINGS]. getSettings() reads slider DOM values
+  every inference cycle. Never cache settings into a local variable
+  that persists across cycles. This is what enables real-time
+  slider adjustment while audio is running.
+
+  RULE F — UPDATING THE INDEX WHEN YOU CHANGE CODE
+  ──────────────────────────────────────────────────
+  When you ADD a section:
+    - Wrap it: // [TAG:XX-NAME] ... // [END:XX-NAME]
+    - Add one line to SECTION INDEX below
+    - Add to CHANGELOG
+
+  When you REMOVE a section:
+    - Remove [TAG:] and [END:] markers with the code
+    - Remove from SECTION INDEX
+    - If it was tried-and-failed: add to KNOWN CONSTRAINTS
+    - Add to CHANGELOG
+
+  When you MODIFY a section:
+    - Keep existing [TAG:] markers
+    - Update description if behavior changed
+    - Add to CHANGELOG
+
+  Bump version: MAJOR for new panels/pipeline, MINOR for tuning/fixes.
+
+  RULE G — DO NOT LEAVE DEAD CODE
+  ─────────────────────────────────
+  When reverting or replacing something:
+  - Delete the old code completely. No commented-out blocks.
+  - Document what was tried and why it failed in KNOWN CONSTRAINTS.
+  - The file must stay clean. Dead code confuses future edits.
+
+  RULE H — VERIFY AFTER EDITING
+  ───────────────────────────────
+  After making changes, mentally verify:
+  [ ] All three script blocks still present and in correct order
+  [ ] No new global variable names shadow existing ones
+  [ ] [TAG:] added to index if new section was created
+  [ ] CHANGELOG updated with version bump
+  [ ] KNOWN CONSTRAINTS updated if something was reverted
+  [ ] No stats table, no localStorage, no external API calls
+
+================================================================================
+  HOW TO READ USER LOGS
+================================================================================
+
+  Log format (one line = one inference cycle):
+    MM:SS.ms  r=X%  n=X%  u=X%  pk=XXXXX  [✓DETECTED]
+
+    r   = confidence for class «р» (0–100%)
+    n   = confidence for class «noise»
+    u   = confidence for class «unknown»
+    pk  = peak amplitude in the 16000-sample window (int16 scale)
+    ✓DETECTED = r% >= threshold slider value
+
+  Markers in the log (purple/yellow/green lines):
+    ── PRESET X: name   = user switched to this preset
+    ▶ НЕПРЕРЫВНОЕ       = user switched to continuous «рррр» mode
+    ▶ РАЗДЕЛЬНОЕ        = user switched to separate «р» · «р» · «р» mode
+
+  HOW TO ANALYSE A LOG:
+  1. Count ✓DETECTED lines per preset section
+  2. Look at r% values that did NOT trigger — gap from threshold shows
+     how much to lower it
+  3. Look at pk values during speech vs silence:
+     - Speech: pk typically 2000–20000
+     - Silence: pk < 500
+  4. r% fluctuates frame-to-frame on same sound — this is normal
+     (ring buffer slides, content changes each 50ms)
+  5. Consecutive same-value lines = ring buffer didn't change
+     (audio chunk smaller than inference interval)
+
+  WHAT "WORKS" MEANS FOR THIS USER:
+  - «р» detected within ~200ms of being spoken
+  - No false positives during silence (r% < 20% when not speaking)
+  - Continuous «рррр» must trigger reliably, not just occasional peaks
+  - Single «р» with pause must also trigger
+
+================================================================================
+  KNOWN CONSTRAINTS — DO NOT REIMPLEMENT
+================================================================================
+
+  ✗ classifyContinuous() / run_classifier_continuous()
+      Tried: WASM slice-based continuous feeding
+      Result: always returned noise, internal buffer misbehaved
+      Status: REMOVED — use classify() on full 1-sec window only
+
+  ✗ noiseSuppression/autoGainControl/echoCancellation: true
+      Result: distorts signal, breaks detection entirely
+      Status: hardcoded false in getUserMedia, do not change
+
+  ✗ Float32 audio without ×AUDIO_SCALE multiplier
+      Result: model always outputs noise (expects int16 amplitude range)
+      Status: scaling is mandatory, slider default 48000
+
+  ✗ Multi-frame smoothing (require N consecutive detections before firing)
+      Result: adds perceptible delay — explicitly rejected by user
+      Status: will not implement under any framing
+
+  ✗ RMS normalization (compute window RMS, scale to TARGET=8000)
+      Result: degraded detection for both quiet and loud speech
+      Status: REVERTED v3.1 — option remains as slider but off by default
+
+  ✗ Peak normalization with TARGET_PEAK=24000
+      Result: degraded detection, especially loud speech
+      Status: REVERTED v3.1
+
+  ✗ setInterval for inference loop
+      Result: interval can't be changed live; replaced with setTimeout chain
+      Status: use setTimeout chain only — see [TAG:JS-INFERENCE]
+
+================================================================================
+-->
+<head>
+  <meta charset="utf-8">
+  <title>Детектор звука «Р»</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* [TAG:CSS-VARIABLES] */
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+      --text: #e8eaf0; --muted: #6b7080;
+      --r-color: #4fffb0; --noise-color: #ff4f6e; --accent: #7b61ff;
+    }
+    html, body { height: 100%; }
+    /* [END:CSS-VARIABLES] */
+
+    /* [TAG:CSS-LAYOUT] */
+    body {
+      font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text);
+      min-height: 100vh; display: flex; flex-direction: column;
+    }
+
+    /* [END:CSS-LAYOUT] */
+
+    /* [TAG:CSS-LAYOUT] continued — panels */
+    /* ── Шапка ── */
+    .app-header {
+      text-align: center; padding: 24px 16px 0;
+    }
+    h1 { font-size: clamp(1.3rem, 3vw, 2rem); font-weight: 700; letter-spacing: -0.03em; }
+    h1 span { color: var(--r-color); }
+
+    /* ── Основной layout ── */
+    .layout {
+      display: flex; flex: 1; gap: 0; overflow: hidden;
+    }
+
+    /* ── Левая панель: логи ── */
+    /* [END:CSS-SETTINGS-PANEL] */
+
+    /* [TAG:CSS-LOG-PANEL] */
+    .panel-log {
+      width: 280px; min-width: 220px; flex-shrink: 0;
+      background: var(--surface); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .panel-title {
+      font-size: 0.72rem; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.1em;
+      padding: 12px 14px 8px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-shrink: 0;
+    }
+    .panel-title button {
+      padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 0.68rem; font-weight: 600; background: var(--bg); color: var(--muted);
+      cursor: pointer; transition: color 0.15s, border-color 0.15s;
+    }
+    .panel-title button:hover { color: var(--text); border-color: var(--muted); }
+    #log-list {
+      flex: 1; overflow-y: auto; font-family: monospace; font-size: 0.68rem;
+      padding: 6px 0; scroll-behavior: smooth;
+    }
+    .log-row {
+      display: grid; grid-template-columns: 52px 1fr; gap: 4px;
+      padding: 2px 10px; line-height: 1.5;
+      border-left: 2px solid transparent;
+    }
+    .log-row.detected {
+      color: var(--r-color); border-left-color: var(--r-color);
+      background: rgba(79,255,176,0.05);
+    }
+    .log-row.noise { color: #444a5a; }
+    .log-ts { color: #3a3d4a; }
+    .log-row.detected .log-ts { color: rgba(79,255,176,0.5); }
+
+    /* ── Центральная панель: приложение ── */
+    .panel-main {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 22px; padding: 24px 16px; overflow-y: auto;
+    }
+
+    /* [END:CSS-LAYOUT] */
+
+    /* [TAG:CSS-INDICATOR] */
+    .indicator {
+      width: 150px; height: 150px; border-radius: 50%; background: var(--surface);
+      border: 2px solid var(--border); display: flex; align-items: center;
+      justify-content: center; font-size: 3.8rem;
+      transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
+    }
+    .indicator.detected {
+      background: rgba(79,255,176,0.12); border-color: var(--r-color);
+      box-shadow: 0 0 40px rgba(79,255,176,0.4);
+    }
+    .indicator.noise { background: rgba(255,79,110,0.08); border-color: var(--noise-color); }
+
+    .label-main {
+      font-size: 1rem; font-weight: 600; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted); transition: color 0.15s;
+    }
+    .label-main.detected { color: var(--r-color); }
+    .label-main.noise    { color: var(--noise-color); }
+
+    /* [END:CSS-INDICATOR] */
+
+    /* [TAG:CSS-BARS] */
+    .bars { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 10px; }
+    .bar-row { display: grid; grid-template-columns: 72px 1fr 48px; align-items: center; gap: 10px; }
+    .bar-label { font-size: 0.78rem; font-weight: 600; color: var(--muted); text-align: right; }
+    .bar-track { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+    .bar-fill { height: 100%; border-radius: 4px; width: 0%; transition: width 0.1s ease; }
+    .bar-fill.r     { background: var(--r-color); }
+    .bar-fill.other { background: var(--noise-color); }
+    .bar-val { font-size: 0.75rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    /* [END:CSS-BARS] */
+
+    /* [TAG:CSS-MIC-LEVEL] */
+    .mic-level-wrap { width: 100%; max-width: 340px; }
+    .mic-level-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 6px; }
+    .mic-level-track { height: 4px; background: var(--bg); border-radius: 2px; border: 1px solid var(--border); overflow: hidden; }
+    .mic-level-fill  { height: 100%; border-radius: 2px; background: var(--accent); width: 0%; transition: width 0.08s; }
+
+    .btn-row { display: flex; gap: 10px; }
+    .btn-row button { padding: 12px 32px; border-radius: 12px; border: none; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+    .btn-row button:active { transform: scale(0.97); }
+    #btn-start { background: var(--r-color); color: #0a1a13; }
+    #btn-stop  { background: var(--surface); color: var(--text); border: 1px solid var(--border); display: none; }
+
+    /* [END:CSS-BUTTONS] */
+
+    /* [TAG:CSS-STATUS] */
+    #status { font-size: 0.75rem; color: var(--muted); text-align: center; min-height: 1.2em; }
+    #status.error { color: var(--noise-color); }
+    #debug-info { font-size: 0.65rem; color: #3a3d4a; font-family: monospace; text-align: center; }
+
+    /* ── Правая панель: настройки ── */
+    /* [END:CSS-PRESET-BUTTONS] */
+
+    /* [TAG:CSS-SETTINGS-PANEL] */
+    .panel-settings {
+      width: 260px; min-width: 220px; flex-shrink: 0;
+      background: var(--surface); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    .settings-section { padding: 14px; border-bottom: 1px solid var(--border); }
+    .settings-section:last-child { border-bottom: none; }
+    .settings-label {
+      font-size: 0.72rem; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px;
+    }
+    .slider-row { margin-bottom: 12px; }
+    .slider-row:last-child { margin-bottom: 0; }
+    .slider-name {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.75rem; color: var(--text); margin-bottom: 5px;
+    }
+    .slider-name span { font-family: monospace; color: var(--r-color); font-size: 0.78rem; font-weight: 700; }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 4px; border-radius: 2px;
+      background: var(--border); outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--r-color); cursor: pointer;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--r-color); cursor: pointer; border: none;
+    }
+    .hint { font-size: 0.66rem; color: #3a3d4a; margin-top: 4px; line-height: 1.4; }
+
+
+    .copy-settings-btn {
+      width: 100%; padding: 10px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--muted); font-size: 0.78rem; font-weight: 600;
+      cursor: pointer; transition: color 0.15s, border-color 0.15s;
+    }
+    .copy-settings-btn:hover { color: var(--text); border-color: var(--muted); }
+    .copy-settings-btn.ok { color: var(--r-color); border-color: var(--r-color); }
+
+    /* [END:CSS-STATUS] */
+
+    /* [TAG:CSS-MODE-BUTTONS] */
+    .mode-btn {
+      flex: 1; padding: 10px 6px; border-radius: 8px;
+      border: 2px solid var(--border); background: var(--bg);
+      color: var(--muted); font-size: 0.75rem; font-weight: 700;
+      cursor: pointer; text-align: center; transition: all 0.15s; line-height: 1.3;
+      position: relative;
+    }
+    .mode-btn:hover { border-color: var(--muted); color: var(--text); }
+    .mode-btn.active-continuous {
+      border-color: #f7b731; background: #f7b731;
+      color: #1a1200; box-shadow: 0 0 16px rgba(247,183,49,0.5);
+    }
+    .mode-btn.active-separate {
+      border-color: var(--r-color); background: var(--r-color);
+      color: #0a1a13; box-shadow: 0 0 16px rgba(79,255,176,0.5);
+    }
+
+    /* [END:CSS-MODE-BUTTONS] */
+
+    /* [TAG:CSS-PRESET-BUTTONS] */
+    .preset-btn {
+      width: 100%; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--text); font-size: 0.73rem; font-weight: 600;
+      cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s;
+      display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    }
+    .preset-btn:hover { border-color: var(--accent); background: rgba(123,97,255,0.07); }
+    .preset-btn.active { border-color: var(--r-color); background: rgba(79,255,176,0.07); color: var(--r-color); }
+    .preset-tag { font-size: 0.62rem; color: var(--muted); font-weight: 400; font-family: monospace; }
+    .preset-btn.active .preset-tag { color: rgba(79,255,176,0.6); }
+
+    .norm-toggle {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.75rem; color: var(--text); cursor: pointer; user-select: none;
+      margin-bottom: 10px;
+    }
+    .norm-toggle input[type=checkbox] { accent-color: var(--r-color); width: 14px; height: 14px; cursor: pointer; }
+    /* [END:CSS-LOG-PANEL] */
+  </style>
+</head>
+<body>
+  <div class="app-header">
+    <h1>Детектор звука <span>«Р»</span></h1>
+  </div>
+
+  <div class="layout">
+
+    <!-- [TAG:HTML-LOG-PANEL] ──────────────────────────────────── -->
+    <div class="panel-log">
+      <div class="panel-title">
+        <span>Лог инференса</span>
+        <div style="display:flex;gap:6px">
+          <button id="btn-clear-log">Очистить</button>
+          <button id="btn-copy-log">Копировать</button>
+        </div>
+      </div>
+      <div id="log-list"></div>
+    </div>
+
+    <!-- [END:HTML-LOG-PANEL] -->
+
+    <!-- [TAG:HTML-MAIN-PANEL] ─────────────────────────────────── -->
+    <div class="panel-main">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
+        <div class="indicator" id="indicator">🎤</div>
+        <div class="label-main" id="label-main">Ожидание</div>
+      </div>
+
+      <div class="bars" id="bars"></div>
+
+      <div class="mic-level-wrap">
+        <div class="mic-level-label">Уровень микрофона</div>
+        <div class="mic-level-track"><div class="mic-level-fill" id="mic-level"></div></div>
+      </div>
+
+      <div class="btn-row">
+        <button id="btn-start">▶ Начать слушать</button>
+        <button id="btn-stop">⬛ Остановить</button>
+      </div>
+
+      <div id="status">Загрузка модели…</div>
+      <div id="debug-info"></div>
+    </div>
+
+    <!-- [END:HTML-MAIN-PANEL] -->
+
+    <!-- [TAG:HTML-SETTINGS-PANEL] ──────────────────────────────── -->
+    <div class="panel-settings">
+
+      <div class="settings-section">
+        <div class="settings-label">Режим произношения</div>
+        <div style="display:flex;gap:8px;margin-bottom:6px">
+          <button class="mode-btn" id="mode-continuous" id="mode-continuous">🔁 Непрерывное<br>«р-р-р-р-р»</button>
+          <button class="mode-btn" id="mode-separate"   id="mode-separate">✂️ Раздельное<br>«р» · «р» · «р»</button>
+        </div>
+        <div class="hint">Переключай во время теста — в лог попадёт метка</div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-label">Пресеты</div>
+        <div style="display:flex;flex-direction:column;gap:7px" id="presets-list"></div>
+        <div class="hint" style="margin-top:8px">Нажми → слайдеры встанут автоматически → тестируй → скопируй лог</div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-label">Порог обнаружения</div>
+        <div class="slider-row">
+          <div class="slider-name">Порог «Р» <span id="val-threshold">0.68</span></div>
+          <input type="range" id="sl-threshold" min="0.50" max="0.95" step="0.01" value="0.68">
+          <div class="hint">↓ меньше — чувствительнее (больше ложных)<br>↑ больше — строже (пропускает тихие)</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-label">Аудио</div>
+        <div class="slider-row">
+          <div class="slider-name">Масштаб × <span id="val-scale">32768</span></div>
+          <input type="range" id="sl-scale" min="8000" max="65536" step="1000" value="32768">
+          <div class="hint">float32→int16. Стандарт: 32768. Увеличь, если модель не слышит тихое.</div>
+        </div>
+        <div class="slider-row">
+          <div class="slider-name">Интервал мс <span id="val-interval">100</span></div>
+          <input type="range" id="sl-interval" min="50" max="500" step="50" value="100">
+          <div class="hint">Как часто запускается инференс. Меньше = быстрее реакция.</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-label">Нормализация</div>
+        <label class="norm-toggle">
+          <input type="checkbox" id="chk-norm"> Включить нормализацию
+        </label>
+        <div class="slider-row">
+          <div class="slider-name">Мин. пик <span id="val-norm-min">500</span></div>
+          <input type="range" id="sl-norm-min" min="100" max="5000" step="100" value="500">
+          <div class="hint">Ниже — тишина, не нормализуем.</div>
+        </div>
+        <div class="slider-row">
+          <div class="slider-name">Целевой пик <span id="val-norm-target">24000</span></div>
+          <input type="range" id="sl-norm-target" min="4000" max="32000" step="1000" value="24000">
+          <div class="hint">К какой амплитуде нормировать.</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <button class="copy-settings-btn" id="btn-copy-settings">📋 Копировать настройки</button>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- [TAG:JS-CLASSIFIER] ─────────────────────────────────────────────────
+    EdgeImpulseClassifier: wraps the WASM module.
+    CRITICAL LOAD ORDER: Module object MUST be pre-declared with onRuntimeInitialized
+    BEFORE edge-impulse-standalone.js loads. The WASM file calls run() synchronously
+    at the end of the JS file, which triggers onRuntimeInitialized immediately.
+    Setting it in a subsequent <script> block would be too late.
+    DO NOT move or split these two script blocks.
+  -->
+  <script>
+  // Pre-declare Module so Edge Impulse picks up our callback before run() fires
+  var Module = {
+    onRuntimeInitialized: function() {
+      classifierInitialized = true;
+    }
+  };
+  let classifierInitialized = false;
+  </script>
+
+  <script src="edge-impulse-standalone.js"></script>
+
+  <script>
+  // [TAG:JS-CLASSIFIER] continued — EdgeImpulseClassifier class
+  // Module is now fully initialized when this script runs.
+  class EdgeImpulseClassifier {
+    init() {
+      if (classifierInitialized) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        Module.onRuntimeInitialized = () => {
+          classifierInitialized = true;
+          let ret = Module.init();
+          if (typeof ret === 'number' && ret != 0) return reject('init() failed: ' + ret);
+          resolve();
+        };
+      });
+    }
+    classify(rawData, debug = false) {
+      if (!classifierInitialized) throw new Error('Not initialized');
+      const obj = this._toHeap(rawData);
+      let ret = Module.run_classifier(obj.buffer.byteOffset, rawData.length, debug);
+      Module._free(obj.ptr);
+      if (ret.result !== 0) throw new Error('Classification failed: ' + ret.result);
+      return this._fillResult(ret);
+    }
+    classifyContinuous(rawData) {
+      if (!classifierInitialized) throw new Error('Not initialized');
+      const obj = this._toHeap(rawData);
+      let ret = Module.run_classifier_continuous(obj.buffer.byteOffset, rawData.length, false, true);
+      Module._free(obj.ptr);
+      if (ret.result !== 0) throw new Error('Classification failed: ' + ret.result);
+      return this._fillResult(ret);
+    }
+    getProperties() {
+      if (!classifierInitialized) throw new Error('Not initialized');
+      return this._toPlain(Module.get_properties(), Module.emcc_classification_properties_t.prototype);
+    }
+    _toHeap(data) {
+      const arr = new Float32Array(data);
+      const bytes = arr.length * arr.BYTES_PER_ELEMENT;
+      const ptr = Module._malloc(bytes);
+      const heap = new Uint8Array(Module.HEAPU8.buffer, ptr, bytes);
+      heap.set(new Uint8Array(arr.buffer));
+      return { ptr, buffer: heap };
+    }
+    _toPlain(obj, proto) {
+      const out = {};
+      for (const key of Object.getOwnPropertyNames(proto)) {
+        const d = Object.getOwnPropertyDescriptor(proto, key);
+        if (d && typeof d.get === 'function') out[key] = obj[key];
+      }
+      return out;
+    }
+    _fillResult(ret) {
+      const props = Module.get_properties();
+      const res = { anomaly: ret.anomaly, results: [] };
+      for (let i = 0; i < ret.size(); i++) {
+        const c = ret.get(i);
+        res.results.push({ label: c.label, value: c.value });
+        c.delete();
+      }
+      ret.delete();
+      return res;
+    }
+  }
+  </script>
+
+  <script>
+  (async () => {
+    const $ = id => document.getElementById(id);
+    const statusEl  = $('status');
+    const debugInfoEl = $('debug-info');
+    const indicator = $('indicator');
+    const labelMain = $('label-main');
+    const barsEl    = $('bars');
+    const micLevel  = $('mic-level');
+    const btnStart  = $('btn-start');
+    const btnStop   = $('btn-stop');
+    const logList   = $('log-list');
+
+    // [TAG:JS-SETTINGS] ────────────────────────────────────────────────────
+    // getSettings() reads live slider values every inference cycle.
+    // No caching — intentional, allows real-time slider changes.
+    const slThreshold   = $('sl-threshold');
+    const slScale       = $('sl-scale');
+    const slInterval    = $('sl-interval');
+    const chkNorm       = $('chk-norm');
+    const slNormMin     = $('sl-norm-min');
+    const slNormTarget  = $('sl-norm-target');
+
+    function getSettings() {
+      return {
+        threshold:  parseFloat(slThreshold.value),
+        scale:      parseInt(slScale.value),
+        interval:   parseInt(slInterval.value),
+        normOn:     chkNorm.checked,
+        normMin:    parseInt(slNormMin.value),
+        normTarget: parseInt(slNormTarget.value),
+      };
+    }
+
+    // Отображение значений слайдеров
+    function bindSlider(slider, valId) {
+      const el = $(valId);
+      el.textContent = slider.value;
+      slider.addEventListener('input', () => { el.textContent = slider.value; });
+    }
+    bindSlider(slThreshold,  'val-threshold');
+    bindSlider(slScale,      'val-scale');
+    bindSlider(slInterval,   'val-interval');
+    bindSlider(slNormMin,    'val-norm-min');
+    bindSlider(slNormTarget, 'val-norm-target');
+
+    // [END:JS-SETTINGS]
+
+    // [TAG:JS-PRESETS] ─────────────────────────────────────────────────────
+    // PRESETS array: each entry is a named config that auto-sets all sliders.
+    // To add/remove presets: edit PRESETS array only. UI is generated dynamically.
+    const PRESETS = [
+      {
+        id: 'C',
+        name: '★ А: Лучший из логов',
+        tag: 'порог 0.60 / 50ms / масштаб 48000',
+        desc: 'Победитель: 30 срабатываний в логе. threshold=0.60, scale=48000, без нормализации.',
+        threshold: 0.60, scale: 48000, interval: 50, normOn: false, normMin: 500, normTarget: 24000
+      },
+      {
+        id: 'E',
+        name: 'Б: Норм + низкий порог',
+        tag: 'порог 0.62 / 50ms / норм пик→16000',
+        desc: 'Второй по результату. Нормализация к 16000.',
+        threshold: 0.62, scale: 40000, interval: 50, normOn: true, normMin: 500, normTarget: 16000
+      },
+      {
+        id: 'B',
+        name: 'В: Норм умеренная',
+        tag: 'порог 0.62 / 100ms / норм пик→20000',
+        desc: 'Третий результат. Менее агрессивный интервал.',
+        threshold: 0.62, scale: 40000, interval: 100, normOn: true, normMin: 800, normTarget: 20000
+      },
+      {
+        id: 'G',
+        name: 'Г: Комбо (порог 0.58 + масштаб 48000 + норм)',
+        tag: 'порог 0.58 / 50ms / масштаб 48000 / норм 16000',
+        desc: 'Новая гипотеза: объединяем лучшее из А и Б. Самый агрессивный вариант.',
+        threshold: 0.58, scale: 48000, interval: 50, normOn: true, normMin: 500, normTarget: 16000
+      },
+      {
+        id: 'H',
+        name: 'Д: Порог 0.55 без нормализации',
+        tag: 'порог 0.55 / 50ms / масштаб 48000',
+        desc: 'Проверяем: не появятся ли ложные срабатывания при пороге 0.55.',
+        threshold: 0.55, scale: 48000, interval: 50, normOn: false, normMin: 500, normTarget: 24000
+      },
+    ];
+
+    // [END:JS-PRESETS]
+
+    // [TAG:JS-MODE] ──────────────────────────────────────────────────────────
+    // setMode('continuous'|'separate'): marks the log with a colored separator.
+    // Buttons: #mode-continuous (yellow), #mode-separate (green).
+    let currentMode = null;
+
+    window.setMode = function setMode(mode) {
+      currentMode = mode;
+      document.getElementById('mode-continuous').classList.toggle('active-continuous', mode === 'continuous');
+      document.getElementById('mode-separate').classList.toggle('active-separate',   mode === 'separate');
+      const label = mode === 'continuous' ? '🔁 НЕПРЕРЫВНОЕ «р-р-р-р-р»' : '✂️ РАЗДЕЛЬНОЕ «р» · «р» · «р»';
+      const color = mode === 'continuous' ? '#f7b731' : '#4fffb0';
+      const marker = document.createElement('div');
+      marker.style.cssText = `padding:4px 10px;font-size:0.65rem;font-family:monospace;color:${color};border-left:2px solid ${color};background:rgba(255,255,255,0.03);`;
+      marker.textContent = '▶ ' + label;
+      document.getElementById('log-list').appendChild(marker);
+      document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
+      logLines.push({ ts: '──', text: 'MODE: ' + (mode === 'continuous' ? 'CONTINUOUS' : 'SEPARATE'), detected: false });
+    }
+
+    document.getElementById('mode-continuous').addEventListener('click', () => window.setMode('continuous'));
+    document.getElementById('mode-separate').addEventListener('click', () => window.setMode('separate'));
+
+    let activePreset = null;
+    const presetsListEl = document.getElementById('presets-list');
+
+    function applyPreset(p) {
+      slThreshold.value  = p.threshold;  document.getElementById('val-threshold').textContent  = p.threshold;
+      slScale.value      = p.scale;      document.getElementById('val-scale').textContent      = p.scale;
+      slInterval.value   = p.interval;   document.getElementById('val-interval').textContent   = p.interval;
+      chkNorm.checked    = p.normOn;
+      slNormMin.value    = p.normMin;    document.getElementById('val-norm-min').textContent   = p.normMin;
+      slNormTarget.value = p.normTarget; document.getElementById('val-norm-target').textContent = p.normTarget;
+      activePreset = p.id;
+      presetsListEl.querySelectorAll('.preset-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.pid === p.id);
+      });
+      // Добавить маркер в лог
+      const marker = document.createElement('div');
+      marker.style.cssText = 'padding:4px 10px;font-size:0.65rem;font-family:monospace;color:#7b61ff;border-left:2px solid #7b61ff;background:rgba(123,97,255,0.07);';
+      marker.textContent = '▶ ПРЕСЕТ ' + p.id + ': ' + p.name;
+      document.getElementById('log-list').appendChild(marker);
+      document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
+      logLines.push({ ts: '──', text: 'PRESET ' + p.id + ': ' + p.name, detected: false });
+    }
+
+    PRESETS.forEach(p => {
+      const btn = document.createElement('button');
+      btn.className = 'preset-btn';
+      btn.dataset.pid = p.id;
+      btn.title = p.desc;
+      btn.innerHTML = '<span>' + p.name + '</span><span class="preset-tag">' + p.tag + '</span>';
+      btn.onclick = () => applyPreset(p);
+      presetsListEl.appendChild(btn);
+    });
+
+    // [END:JS-MODE]
+
+    // [TAG:JS-LOG] ───────────────────────────────────────────────────────────
+    // addLog(ts, r, noise, unknown, detected, peak): appends one row to #log-list.
+    // Max 500 rows kept in DOM and logLines[]. Copy exports logLines + settings.
+    const logLines = []; // { ts, text, detected }
+    const MAX_LOG = 500;
+
+    function addLog(ts, r, noise, unknown, detected, peak) {
+      const text = `r=${(r*100).toFixed(0)}% n=${(noise*100).toFixed(0)}% u=${(unknown*100).toFixed(0)}% pk=${peak}`;
+      logLines.push({ ts, text, detected });
+      if (logLines.length > MAX_LOG) logLines.shift();
+
+      const row = document.createElement('div');
+      row.className = 'log-row ' + (detected ? 'detected' : 'noise');
+      row.innerHTML = `<span class="log-ts">${ts}</span><span>${text}${detected ? ' ✓' : ''}</span>`;
+      logList.appendChild(row);
+      // Убираем старые DOM-строки
+      while (logList.children.length > MAX_LOG) logList.removeChild(logList.firstChild);
+      logList.scrollTop = logList.scrollHeight;
+    }
+
+    $('btn-clear-log').onclick = () => {
+      logLines.length = 0;
+      logList.innerHTML = '';
+    };
+
+    $('btn-copy-log').onclick = () => {
+      const text = '=== НАСТРОЙКИ ===\n' + settingsText() + '\n\n=== ЛОГ ===\n' +
+        logLines.map(l => `${l.ts} ${l.text}${l.detected ? ' ✓DETECTED' : ''}`).join('\n');
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = $('btn-copy-log');
+        btn.textContent = 'Скопировано!';
+        setTimeout(() => btn.textContent = 'Копировать', 1500);
+      });
+    };
+
+    function settingsText() {
+      const s = getSettings();
+      return `threshold=${s.threshold} | scale=${s.scale} | interval=${s.interval}ms | norm=${s.normOn} normMin=${s.normMin} normTarget=${s.normTarget}`;
+    }
+
+    $('btn-copy-settings').onclick = function() {
+      navigator.clipboard.writeText(settingsText()).then(() => {
+        this.textContent = '✓ Скопировано!';
+        this.classList.add('ok');
+        setTimeout(() => { this.textContent = '📋 Копировать настройки'; this.classList.remove('ok'); }, 1500);
+      });
+    };
+
+    // [END:JS-LOG]
+
+    // [TAG:JS-MODEL-INIT] ──────────────────────────────────────────────────
+    // Initializes EdgeImpulseClassifier, reads MODEL_RATE and NUM_SAMPLES
+    // from model properties. Displays in #debug-info.
+    let classifier;
+    try {
+      classifier = new EdgeImpulseClassifier();
+      await classifier.init();
+    } catch (e) {
+      statusEl.textContent = 'Ошибка модели: ' + e;
+      statusEl.className = 'error';
+      return;
+    }
+
+    const props       = classifier.getProperties();
+    const MODEL_RATE  = props.frequency || 16000;
+    const NUM_SAMPLES = props.frame_sample_count;
+
+    debugInfoEl.textContent = `freq=${MODEL_RATE} Hz | window=${NUM_SAMPLES} samples (${(NUM_SAMPLES/MODEL_RATE*1000).toFixed(0)} ms)`;
+    statusEl.textContent = 'Модель готова.';
+
+    // [END:JS-MODEL-INIT]
+
+    // [TAG:JS-BARS] ─────────────────────────────────────────────────────────
+    // buildBars(): creates DOM rows once on first result.
+    // renderResult(): updates bar widths and detection indicator each frame.
+    let barFills = {}, barVals = {}, barsBuilt = false;
+
+    function buildBars(results) {
+      if (barsBuilt) return;
+      barsBuilt = true;
+      barsEl.innerHTML = '';
+      results.forEach(r => {
+        const isR = r.label.toLowerCase() === 'р' || r.label.toLowerCase() === 'r';
+        const row = document.createElement('div');
+        row.className = 'bar-row';
+        row.innerHTML = `
+          <span class="bar-label">${r.label}</span>
+          <div class="bar-track"><div class="bar-fill ${isR ? 'r' : 'other'}" id="fill-${r.label}"></div></div>
+          <span class="bar-val" id="val-${r.label}">0%</span>`;
+        barsEl.appendChild(row);
+        barFills[r.label] = document.getElementById('fill-' + r.label);
+        barVals[r.label]  = document.getElementById('val-'  + r.label);
+      });
+    }
+
+    // ── Отрисовка результата ────────────────────────────────────────────
+    function renderResult(res, peak) {
+      buildBars(res.results);
+      const s = getSettings();
+      const rClass = res.results.find(r => r.label.toLowerCase() === 'р' || r.label.toLowerCase() === 'r');
+      const noiseClass   = res.results.find(r => r.label.toLowerCase() === 'noise'   || r.label.toLowerCase() === 'шум');
+      const unknownClass = res.results.find(r => r.label.toLowerCase() === 'unknown' || r.label.toLowerCase() === 'неизвестно');
+
+      res.results.forEach(r => {
+        if (barFills[r.label]) barFills[r.label].style.width = (r.value * 100) + '%';
+        if (barVals[r.label])  barVals[r.label].textContent  = (r.value * 100).toFixed(0) + '%';
+      });
+
+      const detected = rClass && rClass.value >= s.threshold;
+      indicator.className  = 'indicator ' + (detected ? 'detected' : 'noise');
+      indicator.textContent = detected ? 'Р' : '🎤';
+      labelMain.className  = 'label-main ' + (detected ? 'detected' : 'noise');
+      labelMain.textContent = detected ? 'Звук «Р» обнаружен!' : 'Шум / тишина';
+
+      // Лог
+      const now = new Date();
+      const ts = `${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(Math.floor(now.getMilliseconds()/10)).padStart(2,'0')}`;
+      addLog(
+        ts,
+        rClass      ? rClass.value      : 0,
+        noiseClass  ? noiseClass.value  : 0,
+        unknownClass? unknownClass.value : 0,
+        detected,
+        peak
+      );
+    }
+
+    // [END:JS-BARS]
+
+    // [TAG:JS-RESAMPLE] ─────────────────────────────────────────────────────
+    // Linear interpolation resampler. Used when AudioContext rate ≠ 16000 Hz.
+    // Chrome usually honors { sampleRate: 16000 } so this is often a no-op.
+    function resample(input, fromRate, toRate) {
+      if (fromRate === toRate) return input;
+      const ratio = fromRate / toRate;
+      const out = new Float32Array(Math.floor(input.length / ratio));
+      for (let i = 0; i < out.length; i++) {
+        const pos = i * ratio;
+        const idx = Math.floor(pos);
+        const frac = pos - idx;
+        out[i] = input[idx] + frac * ((input[idx + 1] || 0) - input[idx]);
+      }
+      return out;
+    }
+
+    // [END:JS-RESAMPLE]
+
+    // [TAG:JS-AUDIO] ─────────────────────────────────────────────────────────
+    // getUserMedia: echoCancellation/noiseSuppression/autoGainControl all FALSE.
+    // ScriptProcessorNode bufferSize=4096. Deprecated but functional in Chrome.
+    let audioCtx, sourceNode, processorNode, stream, inferenceTimer;
+    const ringBuf = new Float32Array(NUM_SAMPLES);
+    let ringPos = 0, totalSamples = 0;
+    let currentInterval = 200;
+
+    async function startListening() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+      } catch (e) {
+        statusEl.textContent = 'Нет доступа к микрофону: ' + e.message;
+        statusEl.className = 'error';
+        return;
+      }
+
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: MODEL_RATE });
+      const nativeRate = audioCtx.sampleRate;
+
+      sourceNode    = audioCtx.createMediaStreamSource(stream);
+      processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+
+      processorNode.onaudioprocess = (e) => {
+        const raw = e.inputBuffer.getChannelData(0);
+        let rms = 0;
+        for (let s of raw) rms += s * s;
+        micLevel.style.width = Math.min(Math.sqrt(rms / raw.length) * 500, 100) + '%';
+
+        const samples = nativeRate === MODEL_RATE ? raw : resample(raw, nativeRate, MODEL_RATE);
+        for (let i = 0; i < samples.length; i++) {
+          ringBuf[ringPos] = samples[i];
+          ringPos = (ringPos + 1) % NUM_SAMPLES;
+          totalSamples++;
+        }
+      };
+
+      sourceNode.connect(processorNode);
+      processorNode.connect(audioCtx.destination);
+
+      function scheduleInference() {
+        const s = getSettings();
+        const ms = s.interval;
+        inferenceTimer = setTimeout(() => {
+          // [TAG:JS-INFERENCE] ──────────────────────────────────────────────
+        // Unwrap ring buffer → scale by AUDIO_SCALE → optional peak normalize
+        // → classify() → renderResult(). All params read live from getSettings().
+        if (totalSamples >= NUM_SAMPLES) {
+            const cfg = getSettings();
+            const win = new Float32Array(NUM_SAMPLES);
+            for (let i = 0; i < NUM_SAMPLES; i++) {
+              win[i] = ringBuf[(ringPos + i) % NUM_SAMPLES] * cfg.scale;
+            }
+
+            // Нормализация (если включена)
+            let peak = 0;
+            for (let i = 0; i < win.length; i++) { const a = Math.abs(win[i]); if (a > peak) peak = a; }
+            const peakInt = Math.round(peak);
+            if (cfg.normOn && peak > cfg.normMin) {
+              const gain = cfg.normTarget / peak;
+              for (let i = 0; i < win.length; i++) win[i] *= gain;
+            }
+
+            try {
+              const result = classifier.classify(win);
+              renderResult(result, peakInt);
+            } catch (ex) {
+              console.warn('classify error:', ex);
+            }
+          }
+          if (inferenceTimer !== null) scheduleInference();
+        }, ms);
+      }
+
+      // [END:JS-INFERENCE]
+      scheduleInference();
+
+      // [TAG:JS-START-STOP] ──────────────────────────────────────────────────
+      btnStart.style.display = 'none';
+      btnStop.style.display  = 'inline-block';
+      statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${MODEL_RATE} Гц, окно ${(NUM_SAMPLES/MODEL_RATE*1000).toFixed(0)} мс)`;
+      statusEl.className     = '';
+    }
+
+    function stopListening() {
+      inferenceTimer = null;
+      processorNode?.disconnect();
+      sourceNode?.disconnect();
+      audioCtx?.close();
+      stream?.getTracks().forEach(t => t.stop());
+      totalSamples = 0; ringPos = 0;
+      btnStart.style.display = 'inline-block';
+      btnStop.style.display  = 'none';
+      statusEl.textContent   = 'Остановлено.';
+      indicator.className    = 'indicator';
+      indicator.textContent  = '🎤';
+      labelMain.className    = 'label-main';
+      labelMain.textContent  = 'Ожидание';
+      micLevel.style.width   = '0%';
+    }
+
+    btnStart.onclick = startListening;
+    btnStop.onclick  = stopListening;
+  })();
+  </script>
+</body>
+</html>
