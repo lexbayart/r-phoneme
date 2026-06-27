@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-27  v5.8 (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-27  v5.9 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,13 +91,24 @@
    CHANGELOG
 ================================================================================
 
+  v5.9 (2026-06-27)
+    - CHANGED: updateLevelMonitor() no longer appends DOM rows on every
+              audio frame — eliminates ~4 DOM ops/sec during L-mode recording.
+              logLines.push() retained for data export.   [TAG:JS-LEVEL-CYCLE]
+    - CHANGED: logList.scrollTop wrapped in requestAnimationFrame in addLog()
+              — removes forced synchronous layout recalc on every inference frame.
+              [TAG:JS-BARS]
+    - ADDED: WHISPER_THRESHOLD = 0.5 constant replacing magic number in
+              [TAG:JS-LEVEL-STATUS-RULES]
+    - ADDED: ZONE_HOLD_MS and WHISPER_THRESHOLD to KEY CONSTANTS in file header
+
   v5.8 (2026-06-27)
-     - FIXED: CHANGELOG v5.0 entry: evaluateLevelAttempt →
-               updateLevelMonitor (function was inlined, name never existed)
-     - FIXED: sessionStartTime + recStartTime reset to 0 in switchTaskSet() —
-               prevents L-mode log timestamps being offset by prior R-mode session [TAG:JS-MODE]
-     - FIXED: activePreset reset to null in switchTaskSet() —
-               prevents stale preset highlight after R→L→R switch [TAG:JS-MODE]
+    - FIXED: CHANGELOG v5.0 entry: evaluateLevelAttempt →
+              updateLevelMonitor (function was inlined, name never existed)
+    - FIXED: sessionStartTime + recStartTime reset to 0 in switchTaskSet() —
+              prevents L-mode log timestamps being offset by prior R-mode session [TAG:JS-MODE]
+    - FIXED: activePreset reset to null in switchTaskSet() —
+              prevents stale preset highlight after R→L→R switch [TAG:JS-MODE]
 
    v5.7 (2026-06-27)
     - CHANGED: ZONE_HOLD_MS 450→200ms in [TAG:JS-LEVEL-CYCLE].
@@ -454,6 +465,9 @@
 
   NORM_TARGET  = 16000  Target peak amplitude when normalization is ON
   NORM_MIN     = 500    Minimum peak below which normalization is skipped (silence guard)
+
+  ZONE_HOLD_MS       = 200   Min continuous in-zone time (ms) to pass a level in L mode
+  WHISPER_THRESHOLD  = 0.5   Lower bound for Тихо level (mic%) — below this = silence
 
 ================================================================================
   KNOWN CONSTRAINTS — DO NOT REVERT
@@ -1373,7 +1387,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v5.8';
+    const APP_VERSION = 'v5.9';
     // [END:JS-VERSION]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
     const statusEl  = $('status');
@@ -1564,6 +1578,7 @@
         quietMsg: 'Громче — пусть слог прозвучит уверенно 📢' },
     ];
     const ZONE_HOLD_MS = 200; // how long the level must stay in-zone before it's counted as passed
+    const WHISPER_THRESHOLD = 0.5; // mic% below this = silence, not a valid Тихо attempt
     // [END:JS-LEVEL-CYCLE-DATA]
 
 
@@ -1835,14 +1850,14 @@
 
       // [TAG:JS-LEVEL-STATUS-RULES] ──────────────────────────────────────────
       // Asymmetric pass/fail per level (v5.3):
-      //   Тихо  (0): ok if 0.5 ≤ mic ≤ Тихо.max — any whisper passes; only over = fail.
-      //              under (<0.5) = near-silence, prompt to say something.
+      //   Тихо  (0): ok if WHISPER_THRESHOLD ≤ mic ≤ Тихо.max — any whisper passes; only over = fail.
+      //              under (<WHISPER_THRESHOLD) = near-silence, prompt to say something.
       //   Средне (1): ok if Тихо.max < mic < Громко.min — two-sided, gap between neighbours.
       //   Громко (2): ok if mic ≥ Громко.min — only lower limit matters, no upper cap.
       let status;
       if (lLevelIdx === 0) {
         if (micPercent > LEVELS_L[0].max) status = 'over';  // too loud — only failure for Тихо
-        else if (micPercent < 0.5)        status = 'under'; // near-total silence
+        else if (micPercent < WHISPER_THRESHOLD) status = 'under'; // near-total silence
         else                              status = 'ok';    // any whisper passes
       } else if (lLevelIdx === 1) {
         const lo = LEVELS_L[0].max;  // Тихо ceiling = Средне lower bound
@@ -1929,16 +1944,10 @@
       if (status === 'ok')    logSuffix = ' ✓ ПОПАДАНИЕ';
       else if (status === 'over')  logSuffix = ' — слишком громко';
       else if (lLevelIdx === 0)    logSuffix = ' — тишина';
-      else                         logSuffix = ' — тише нужного';
+       else                         logSuffix = ' — тише нужного';
       const rowText = mc.sound.toUpperCase() + ' [' + lvl.label + '] ' + micPercent.toFixed(0) + '%' + logSuffix;
       logLines.push({ ts, text: rowText, detected: status === 'ok' });
       if (logLines.length > MAX_LOG) logLines.shift();
-      const row = document.createElement('div');
-      row.className = 'log-row ' + (status === 'ok' ? 'detected' : 'noise');
-      row.innerHTML = `<span class="log-ts">${ts}</span><span>${rowText}</span>`;
-      logList.appendChild(row);
-      while (logList.children.length > MAX_LOG) logList.removeChild(logList.firstChild);
-      logList.scrollTop = logList.scrollHeight;
 
       // ── sustained in-zone hold → level passed ───────────────────────────
       if (status === 'ok') {
@@ -2181,7 +2190,7 @@
       logList.appendChild(row);
       // Убираем старые DOM-строки
       while (logList.children.length > MAX_LOG) logList.removeChild(logList.firstChild);
-      logList.scrollTop = logList.scrollHeight;
+      requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
     }
 
     $('btn-clear-log').onclick = () => {
