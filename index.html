@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-27  (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-27  v5.8 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,7 +91,15 @@
    CHANGELOG
 ================================================================================
 
-  v5.7 (2026-06-27)
+  v5.8 (2026-06-27)
+     - FIXED: CHANGELOG v5.0 entry: evaluateLevelAttempt →
+               updateLevelMonitor (function was inlined, name never existed)
+     - FIXED: sessionStartTime + recStartTime reset to 0 in switchTaskSet() —
+               prevents L-mode log timestamps being offset by prior R-mode session [TAG:JS-MODE]
+     - FIXED: activePreset reset to null in switchTaskSet() —
+               prevents stale preset highlight after R→L→R switch [TAG:JS-MODE]
+
+   v5.7 (2026-06-27)
     - CHANGED: ZONE_HOLD_MS 450→200ms in [TAG:JS-LEVEL-CYCLE].
               One audio frame (256ms) now sufficient to pass a level.
               Eliminates false resets caused by natural voice amplitude variation.
@@ -151,7 +159,7 @@
                Each card now records the SAME syllable three times at three
                target loudness levels instead of cycling through PRESETS.        [TAG:JS-MODE]
     - ADDED:   LEVELS_L — 3 loudness levels (quiet/medium/loud) with RMS% bounds. [TAG:JS-MODE]
-    - ADDED:   startLevelCycle()/evaluateLevelAttempt()/stopLevelCycle() —
+    - ADDED:   startLevelCycle()/updateLevelMonitor()/stopLevelCycle() —
                volume-gated recording loop for L task-set, parallel to the
                classifier-driven startPresetCycle() used for R.                  [TAG:JS-LEVEL-CYCLE]
     - ADDED:   renderCardL() — shows 3 sized "ля/ля/ля" badges (small/medium/large),
@@ -1365,7 +1373,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v5.7';
+    const APP_VERSION = 'v5.8';
     // [END:JS-VERSION]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
     const statusEl  = $('status');
@@ -1638,6 +1646,8 @@
       cardIndex = 0;
       lLevelIdx = 0;
       lZoneStart = null;
+      sessionStartTime = 0; recStartTime = 0; // reset audio session for clean timestamps in new mode
+      activePreset = null;
       $('task-card').classList.remove('completed');
       btnStart.textContent = '▶ Начать';
       btnStart.style.background = '';
