@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-27  v5.10 (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-27  v5.11 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -90,6 +90,24 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+  v5.11 (2026-06-27)
+    - FIXED: TAG structure — JS-LEVEL-CYCLE extracted from inside
+      JS-CARD-CYCLE, now sequential [TAG:JS-LEVEL-CYCLE]
+    - FIXED: JS-START-STOP marker now covers full startListening()
+      + stopListening() [TAG:JS-START-STOP]
+    - FIXED: JS-INFERENCE END marker moved to end of
+      scheduleInference() [TAG:JS-INFERENCE]
+    - ADDED: [TAG:JS-CONFETTI] and [TAG:JS-CELEBRATION-SOUND]
+      markers for previously untagged functions
+    - CHANGED: #7b61ff → var(--accent) in all CSS locations
+    - CHANGED: task card box-shadow blur reduced 40→20px (recording),
+      60→25px (completed) [TAG:CSS-TASK-CARD]
+    - FIXED: launchConfetti() double-invocation guard added
+      [TAG:JS-CONFETTI]
+    - CHANGED: resample() reuses pre-allocated Float32Array buffer
+      instead of allocating on every audio chunk [TAG:JS-RESAMPLE]
+    - Update APP_VERSION to 'v5.11' [TAG:JS-VERSION]
 
   v5.10 (2026-06-27)
     - REMOVED: setMode() — dead function, never called after v4.9
@@ -429,9 +447,11 @@
   JAVASCRIPT
   ──────────
   [TAG:JS-RECORDER]          Raw WAV encoder (16-bit PCM 16kHz mono); download on click
+  [TAG:JS-LEVEL-CYCLE]       L task-set only: 3-level volume-gated recording loop (тихо/средне/громко)
   [TAG:JS-CARD-CYCLE]        Task card display + preset auto-cycle (3 sec/preset); replaces JS-AUTOSTOP
   [TAG:JS-CARD-NAV]          L task-set: completedCards tracking + card nav list in right panel
-  [TAG:JS-LEVEL-CYCLE]       L task-set only: 3-level volume-gated recording loop (тихо/средне/громко)
+  [TAG:JS-CONFETTI]          Confetti animation on card/set completion
+  [TAG:JS-CELEBRATION-SOUND] Web Audio celebration tone sequence
   [TAG:JS-CLASSIFIER]        EdgeImpulseClassifier class (run-impulse.js inlined)
   [TAG:JS-SETTINGS]          getSettings(), slider value bindings
   [TAG:JS-PRESETS]           PRESETS array definition + applyPreset()
@@ -445,7 +465,7 @@
   [TAG:JS-AUDIO]             getUserMedia, AudioContext, ScriptProcessorNode
   [TAG:JS-RINGBUFFER]        Ring buffer write (inside onaudioprocess)
   [TAG:JS-INFERENCE]         Inference loop — unwrap, scale, normalize, classify
-  [TAG:JS-START-STOP]        startListening(), stopListening()
+  [TAG:JS-START-STOP]        startListening() + stopListening() — full implementation of both functions
 
 ================================================================================
   KEY CONSTANTS & TUNABLES
@@ -947,7 +967,7 @@
     .card-nav-btn .nav-check { font-size: 0.75rem; flex-shrink: 0; opacity: 0; }
     /* Current card: bright accent */
     .card-nav-btn.current {
-      border-color: #7b61ff; background: rgba(123,97,255,0.14);
+      border-color: var(--accent); background: rgba(123,97,255,0.14);
       color: #c4b5fd; box-shadow: 0 0 12px rgba(123,97,255,0.25);
     }
     /* Completed card: green */
@@ -1007,7 +1027,7 @@
     }
     .task-card.recording {
       border-color: var(--r-color);
-      box-shadow: 0 0 40px rgba(79,255,176,0.25);
+      box-shadow: 0 0 20px rgba(79,255,176,0.25);
     }
     .task-card-number {
       font-size: 0.68rem; font-weight: 700; color: var(--muted);
@@ -1042,7 +1062,7 @@
     .task-card.completed {
       border-color: var(--r-color);
       background: rgba(79,255,176,0.13);
-      box-shadow: 0 0 60px rgba(79,255,176,0.3);
+      box-shadow: 0 0 25px rgba(79,255,176,0.3);
     }
     .task-card.completed .task-card-name,
     .task-card.completed .task-card-hint,
@@ -1088,10 +1108,10 @@
       text-transform: uppercase; letter-spacing: 0.06em;
     }
     .level-badge.active {
-      border-color: #7b61ff; background: rgba(123,97,255,0.14);
+      border-color: var(--accent); background: rgba(123,97,255,0.14);
       box-shadow: 0 0 24px rgba(123,97,255,0.3);
     }
-    .level-badge.active .lvl-label { color: #7b61ff; }
+    .level-badge.active .lvl-label { color: var(--accent); }
     .level-badge.done {
       border-color: var(--r-color); background: rgba(79,255,176,0.1);
     }
@@ -1370,9 +1390,10 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v5.10';
+    const APP_VERSION = 'v5.11';
     // [END:JS-VERSION]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
+    let confettiActive = false;
     const statusEl  = $('status');
     const debugInfoEl = $('debug-info');
     const indicator = $('indicator');
@@ -1688,51 +1709,6 @@
 
     // [END:JS-MODE]
 
-    // [TAG:JS-CARD-CYCLE] ──────────────────────────────────────────────────────
-    // Replaces JS-AUTOSTOP. Shows MODES[] as task cards in center panel.
-    // During recording: presets auto-cycle every PRESET_SLOT_SEC seconds.
-    // After all PRESETS[] complete → stopListening() → advance card → show "Ready".
-    // PRESET_SLOT_SEC × PRESETS.length = total recording time per card.
-    const PRESET_SLOT_SEC = 3;
-    let cardIndex      = 0;
-    let presetCycleIdx = 0;
-    let presetCycleTimer = null;
-    let sessionLogStart  = 0; // logLines index at session start — for per-session detection count
-
-    function renderCard(isRecording) {
-      if (currentTaskSet === 'l') { renderCardL(isRecording); return; }
-      const m = MODES[cardIndex];
-      $('card-number').textContent    = 'Задание ' + (cardIndex + 1) + ' из ' + MODES.length;
-      $('card-emoji').textContent     = m.emoji;
-      $('card-name').textContent      = m.name;
-      $('card-desc').style.display    = '';
-      $('card-desc-text').textContent = m.desc;
-      $('card-hint').textContent      = m.hint;
-      $('card-footer').textContent    = isRecording
-        ? '⏺ Идёт запись — повторяйте задание…'
-        : '✅ Если готовы — нажмите «Начать»';
-      $('task-card').className = 'task-card' + (isRecording ? ' recording' : '');
-      const badges = $('level-badges');
-      const track  = $('level-meter-track');
-      const warn   = $('level-warning');
-      if (badges) badges.style.display = 'none';
-      if (track)  track.style.display  = 'none';
-      if (warn)   { warn.textContent = ''; warn.className = 'level-warning'; }
-
-      const bar = $('card-progress-bar');
-      if (isRecording) {
-        const totalMs = PRESETS.length * PRESET_SLOT_SEC * 1000;
-        bar.style.transition = 'none';
-        bar.style.width = '0%';
-        bar.getBoundingClientRect(); // force reflow so transition fires
-        bar.style.transition = `width ${totalMs}ms linear`;
-        bar.style.width = '100%';
-      } else {
-        bar.style.transition = 'none';
-        bar.style.width = '0%';
-      }
-    }
-
     // [TAG:JS-LEVEL-CYCLE] ───────────────────────────────────────────────────
     // L task-set rendering + continuous volume-gated monitoring. The card shows
     // the SAME syllable three times, in growing type size (lvl-small/medium/large),
@@ -1943,6 +1919,51 @@
     }
     // [END:JS-LEVEL-CYCLE]
 
+    // [TAG:JS-CARD-CYCLE] ──────────────────────────────────────────────────────
+    // Replaces JS-AUTOSTOP. Shows MODES[] as task cards in center panel.
+    // During recording: presets auto-cycle every PRESET_SLOT_SEC seconds.
+    // After all PRESETS[] complete → stopListening() → advance card → show "Ready".
+    // PRESET_SLOT_SEC × PRESETS.length = total recording time per card.
+    const PRESET_SLOT_SEC = 3;
+    let cardIndex      = 0;
+    let presetCycleIdx = 0;
+    let presetCycleTimer = null;
+    let sessionLogStart  = 0; // logLines index at session start — for per-session detection count
+
+    function renderCard(isRecording) {
+      if (currentTaskSet === 'l') { renderCardL(isRecording); return; }
+      const m = MODES[cardIndex];
+      $('card-number').textContent    = 'Задание ' + (cardIndex + 1) + ' из ' + MODES.length;
+      $('card-emoji').textContent     = m.emoji;
+      $('card-name').textContent      = m.name;
+      $('card-desc').style.display    = '';
+      $('card-desc-text').textContent = m.desc;
+      $('card-hint').textContent      = m.hint;
+      $('card-footer').textContent    = isRecording
+        ? '⏺ Идёт запись — повторяйте задание…'
+        : '✅ Если готовы — нажмите «Начать»';
+      $('task-card').className = 'task-card' + (isRecording ? ' recording' : '');
+      const badges = $('level-badges');
+      const track  = $('level-meter-track');
+      const warn   = $('level-warning');
+      if (badges) badges.style.display = 'none';
+      if (track)  track.style.display  = 'none';
+      if (warn)   { warn.textContent = ''; warn.className = 'level-warning'; }
+
+      const bar = $('card-progress-bar');
+      if (isRecording) {
+        const totalMs = PRESETS.length * PRESET_SLOT_SEC * 1000;
+        bar.style.transition = 'none';
+        bar.style.width = '0%';
+        bar.getBoundingClientRect(); // force reflow so transition fires
+        bar.style.transition = `width ${totalMs}ms linear`;
+        bar.style.width = '100%';
+      } else {
+        bar.style.transition = 'none';
+        bar.style.width = '0%';
+      }
+    }
+
     function showPresetSlot(idx) {
       const el = $('countdown');
       if (!el) return;
@@ -2068,7 +2089,10 @@
       });
     }
 
+    // [TAG:JS-CONFETTI] ──────────────────────────────────────────────────────
     function launchConfetti() {
+      if (confettiActive) return;
+      confettiActive = true;
       const canvas = document.createElement('canvas');
       canvas.id = 'confetti-canvas';
       canvas.width = window.innerWidth;
@@ -2106,11 +2130,13 @@
           ctx.restore();
         }
         if (alive) { rafId = requestAnimationFrame(draw); }
-        else { cancelAnimationFrame(rafId); canvas.remove(); }
+        else { confettiActive = false; cancelAnimationFrame(rafId); canvas.remove(); }
       }
       draw();
     }
+    // [END:JS-CONFETTI]
 
+    // [TAG:JS-CELEBRATION-SOUND] ──────────────────────────────────────────────
     function playCelebrationSound() {
       try {
         const ac = new AudioContext();
@@ -2128,6 +2154,7 @@
         });
       } catch(e) { /* AudioContext blocked — ignore */ }
     }
+    // [END:JS-CELEBRATION-SOUND]
 
     function stopPresetCycle() {
       if (presetCycleTimer) {
@@ -2351,10 +2378,15 @@
     // [TAG:JS-RESAMPLE] ─────────────────────────────────────────────────────
     // Linear interpolation resampler. Used when AudioContext rate ≠ 16000 Hz.
     // Chrome usually honors { sampleRate: 16000 } so this is often a no-op.
+    let resampleBuf = null;
     function resample(input, fromRate, toRate) {
       if (fromRate === toRate) return input;
       const ratio = fromRate / toRate;
-      const out = new Float32Array(Math.floor(input.length / ratio));
+      const outLen = Math.ceil(input.length * (toRate / fromRate));
+      if (!resampleBuf || resampleBuf.length !== outLen) {
+        resampleBuf = new Float32Array(outLen);
+      }
+      const out = resampleBuf;
       for (let i = 0; i < out.length; i++) {
         const pos = i * ratio;
         const idx = Math.floor(pos);
@@ -2465,6 +2497,7 @@
     $('btn-download-audio').onclick = recDownloadWav;
     // [END:JS-RECORDER]
 
+    // [TAG:JS-START-STOP] ──────────────────────────────────────────────────
     async function startListening() {
       if (isListening) return;  // prevent double-start on rapid clicks
       // Remove empty-guard message immediately when recording starts
@@ -2516,15 +2549,15 @@
       };
 
       sourceNode.connect(processorNode);
-      processorNode.connect(audioCtx.destination);
+       processorNode.connect(audioCtx.destination);
 
-      function scheduleInference() {
+       // [TAG:JS-INFERENCE] ──────────────────────────────────────────────
+       // Unwrap ring buffer → scale by AUDIO_SCALE → optional peak normalize
+       // → classify() → renderResult(). All params read live from getSettings().
+       function scheduleInference() {
         const s = getSettings();
         const ms = s.interval;
         inferenceTimer = setTimeout(() => {
-          // [TAG:JS-INFERENCE] ──────────────────────────────────────────────
-        // Unwrap ring buffer → scale by AUDIO_SCALE → optional peak normalize
-        // → classify() → renderResult(). All params read live from getSettings().
         if (totalSamples >= NUM_SAMPLES) {
             const cfg = getSettings();
             const win = new Float32Array(NUM_SAMPLES);
@@ -2550,17 +2583,15 @@
           }
           if (inferenceTimer !== null) scheduleInference();
         }, ms);
-      }
-
-      // [END:JS-INFERENCE]
-      if (currentTaskSet === 'l') {
+       }
+       // [END:JS-INFERENCE]
+       if (currentTaskSet === 'l') {
         // L task-set: no model inference needed, only mic RMS — see [TAG:JS-LEVEL-CYCLE]
       } else {
         scheduleInference();
-      }
+       }
 
-      // [TAG:JS-START-STOP] ──────────────────────────────────────────────────
-      btnStart.style.display = 'none';
+       btnStart.style.display = 'none';
       btnStop.style.display  = 'inline-block';
       statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${MODEL_RATE} Гц, окно ${(NUM_SAMPLES/MODEL_RATE*1000).toFixed(0)} мс)`;
       statusEl.className     = '';
