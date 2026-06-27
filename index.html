@@ -91,6 +91,11 @@
    CHANGELOG
 ================================================================================
 
+  v5.7 (2026-06-27)
+    - CHANGED: ZONE_HOLD_MS 450→200ms in [TAG:JS-LEVEL-CYCLE].
+              One audio frame (256ms) now sufficient to pass a level.
+              Eliminates false resets caused by natural voice amplitude variation.
+
   v5.6 (2026-06-27)
     - ADDED: APP_VERSION constant — single source of truth for version number.
               Displayed in UI below model debug line.   [TAG:JS-VERSION]
@@ -1360,7 +1365,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v5.6';
+    const APP_VERSION = 'v5.7';
     // [END:JS-VERSION]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
     const statusEl  = $('status');
@@ -1550,7 +1555,7 @@
       { key: 'loud',   label: 'Громко', sizeClass: 'lvl-large',  min: 18,
         quietMsg: 'Громче — пусть слог прозвучит уверенно 📢' },
     ];
-    const ZONE_HOLD_MS = 450; // how long the level must stay in-zone before it's counted as passed
+    const ZONE_HOLD_MS = 200; // how long the level must stay in-zone before it's counted as passed
     // [END:JS-LEVEL-CYCLE-DATA]
 
 
