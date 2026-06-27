@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Version: 5.3  |  Last updated: 2026-06-27
+  Version: 5.4  |  Last updated: 2026-06-27
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -88,8 +88,17 @@
   which fires onRuntimeInitialized. Block 1 must pre-declare it.
 
 ================================================================================
-  CHANGELOG
+   CHANGELOG
 ================================================================================
+
+  v5.4 (2026-06-27)
+    - ADDED: Empty-log download guard — if logLines has no data entries, clicking
+              «Скачать» turns the button red, plays a short descending error tone
+              (400→200 Hz, 180ms), inserts a red italic message into the log area,
+              and restores the button after 1.8s. Message auto-removes after 5s
+              or immediately when «Начать» is clicked.   [TAG:JS-LOG-EMPTY-GUARD] [TAG:CSS-LOG-EMPTY-GUARD]
+    - ADDED: Left panel section labels — «Выберите задание» above task-set buttons,
+              «История выполнения» above log area. Small, muted, uppercase style.  [TAG:HTML-LEFT-PANEL-LABELS] [TAG:CSS-LEFT-PANEL-LABELS]
 
   v5.3 (2026-06-27)
     - FIXED:   [Critical] card-nav-l never appeared in L mode — switchTaskSet() set
@@ -352,6 +361,8 @@
   [TAG:CSS-VARIABLES]        Theme colors and design tokens (:root)
   [TAG:CSS-LAYOUT]           Body, .layout, panel sizing (two blocks: body + panels)
   [TAG:CSS-LOG-PANEL]        Left panel: log rows, colors, scroll, .panel-main
+  [TAG:CSS-LOG-EMPTY-GUARD]  Red italic message line for empty-log download guard
+  [TAG:CSS-LEFT-PANEL-LABELS] Section divider labels in left panel (muted, uppercase)
   [TAG:CSS-INDICATOR]        Circle detection indicator
   [TAG:CSS-BARS]             Per-class confidence bar rows
   [TAG:CSS-MIC-LEVEL]        Microphone level strip
@@ -368,6 +379,7 @@
   HTML
   ────
   [TAG:HTML-LOG-PANEL]       Left column — inference log + copy/clear buttons (mode-grid removed v4.0)
+  [TAG:HTML-LEFT-PANEL-LABELS] Section labels: «Выберите задание» / «История выполнения»
   [TAG:HTML-MODE-PANEL]      REMOVED v4.0 — placeholder comment kept; task cards replaced mode buttons
   [TAG:HTML-TASK-CARD]       Task card div in center panel — exercise per card/mode
   [TAG:HTML-MAIN-PANEL]      Center column — task card, bars, mic, start/stop
@@ -385,6 +397,7 @@
   [TAG:JS-PRESETS]           PRESETS array definition + applyPreset()
   [TAG:JS-MODE]              MODES array + setMode() log marker; preset buttons rendering
   [TAG:JS-LOG]               addLog(), copy log, download log (.txt), clear log + audio reset
+  [TAG:JS-LOG-EMPTY-GUARD]   Guard: block download when log empty; red button, error sound, auto-remove message
   [TAG:JS-MODEL-INIT]        Model init, getProperties(), debug line
   [TAG:JS-BARS]              buildBars(), renderResult() — UI update per frame
   [TAG:JS-RESAMPLE]          resample() — linear interpolation, native→16kHz
@@ -744,6 +757,22 @@
 
     /* [END:CSS-LOG-PANEL] */
 
+    /* [TAG:CSS-LOG-EMPTY-GUARD] Red message line for empty-log download guard */
+    .log-row.empty-guard {
+      color: var(--noise-color); border-left-color: var(--noise-color);
+      background: rgba(255,79,110,0.06);
+      font-style: italic;
+    }
+    /* [END:CSS-LOG-EMPTY-GUARD] */
+
+    /* [TAG:CSS-LEFT-PANEL-LABELS] Section dividers in left panel */
+    .left-panel-label {
+      font-size: 0.62rem; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.12em;
+      padding: 8px 14px 4px; opacity: 0.6;
+    }
+    /* [END:CSS-LEFT-PANEL-LABELS] */
+
     /* [TAG:CSS-INDICATOR] */
     .indicator {
       width: 150px; height: 150px; border-radius: 50%; background: var(--surface);
@@ -1082,10 +1111,13 @@
       <!-- [TAG:HTML-MODE-PANEL] removed in v4.0 — task cards replace mode buttons -->
       <!-- [END:HTML-MODE-PANEL] -->
 
+      <!-- [TAG:HTML-LEFT-PANEL-LABELS] Section labels for left panel zones -->
+      <div class="left-panel-label">Выберите задание</div>
       <div id="task-set-selector">
         <button class="task-set-btn active" id="btn-set-r">Правильное Р</button>
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
       </div>
+      <div class="left-panel-label">История выполнения</div>
       <div class="panel-title">
         <div style="display:flex;gap:6px;flex-wrap:nowrap">
           <button id="btn-clear-log">Очистить</button>
@@ -1093,6 +1125,7 @@
           <button id="btn-download-log">Скачать</button>
         </div>
       </div>
+      <!-- [END:HTML-LEFT-PANEL-LABELS] -->
       <div id="log-list"></div>
     </div>
 
@@ -2145,7 +2178,61 @@
       });
     };
 
+    // [TAG:JS-LOG-EMPTY-GUARD] Guard: block download when log is empty
+    const emptyGuardMsgId = '__empty_guard_msg__';
+    let emptyGuardAutoRemoveTimer = null;
+
+    function hasDataEntries() {
+      return logLines.some(l => l.ts !== '──');
+    }
+
+    function showEmptyGuardMessage() {
+      removeEmptyGuardMessage();
+      const msgText = 'В логе нет ни одной записи — сохранять нечего.';
+      logLines.push({ ts: '──', text: msgText, detected: false, id: emptyGuardMsgId });
+      const row = document.createElement('div');
+      row.className = 'log-row empty-guard';
+      row.id = emptyGuardMsgId;
+      row.innerHTML = `<span class="log-ts">──</span><span>${msgText}</span>`;
+      logList.appendChild(row);
+      logList.scrollTop = logList.scrollHeight;
+      // Auto-remove after 5 seconds if recording never starts
+      emptyGuardAutoRemoveTimer = setTimeout(removeEmptyGuardMessage, 5000);
+    }
+
+    function removeEmptyGuardMessage() {
+      if (emptyGuardAutoRemoveTimer) { clearTimeout(emptyGuardAutoRemoveTimer); emptyGuardAutoRemoveTimer = null; }
+      const domRow = document.getElementById(emptyGuardMsgId);
+      if (domRow) domRow.remove();
+      const idx = logLines.findIndex(l => l.id === emptyGuardMsgId);
+      if (idx !== -1) logLines.splice(idx, 1);
+    }
+
     $('btn-download-log').onclick = () => {
+      if (!hasDataEntries()) {
+        // Block download: turn button red
+        const btn = $('btn-download-log');
+        btn.style.color = 'var(--noise-color)';
+        btn.style.borderColor = 'var(--noise-color)';
+        // Play short error sound: descending tone 400→200 Hz, ~180ms
+        try {
+          const ac = new AudioContext();
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(400, ac.currentTime);
+          osc.frequency.linearRampToValueAtTime(200, ac.currentTime + 0.18);
+          gain.gain.setValueAtTime(0.18, ac.currentTime);
+          gain.gain.linearRampToValueAtTime(0, ac.currentTime + 0.18);
+          osc.start(ac.currentTime); osc.stop(ac.currentTime + 0.2);
+        } catch(e) { /* AudioContext blocked — ignore */ }
+        // Show red message in log
+        showEmptyGuardMessage();
+        // Restore button appearance after 1.8s
+        setTimeout(() => { btn.style.color = ''; btn.style.borderColor = ''; }, 1800);
+        return;
+      }
       const text = '=== НАСТРОЙКИ ===\n' + settingsText() + '\n\n=== ЛОГ ===\n' +
         logLines.map(l => `${l.ts} ${l.text}${l.detected ? ' ✓DETECTED' : ''}`).join('\n');
       const blob = new Blob([text], { type: 'text/plain; charset=utf-8' });
@@ -2158,6 +2245,7 @@
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
+    // [END:JS-LOG-EMPTY-GUARD]
 
     function settingsText() {
       const s = getSettings();
@@ -2375,6 +2463,8 @@
 
     async function startListening() {
       if (isListening) return;  // prevent double-start on rapid clicks
+      // Remove empty-guard message immediately when recording starts
+      removeEmptyGuardMessage();
       isListening = true;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
