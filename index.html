@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Version: 5.5  |  Last updated: 2026-06-27
+  Last updated: 2026-06-27  (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -90,6 +90,11 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+  v5.6 (2026-06-27)
+    - ADDED: APP_VERSION constant — single source of truth for version number.
+              Displayed in UI below model debug line.   [TAG:JS-VERSION]
+    - REMOVED: Version field from file header doc-comment (redundant).
 
   v5.5 (2026-06-27)
     - CHANGED: MODES_L syllable labels capitalized in source data (ля→ЛЯ etc.)
@@ -402,6 +407,7 @@
   [TAG:JS-MODE]              MODES array + setMode() log marker; preset buttons rendering
   [TAG:JS-LOG]               addLog(), copy log, download log (.txt), clear log + audio reset
   [TAG:JS-LOG-EMPTY-GUARD]   Guard: block download when log empty; red button, error sound, auto-remove message
+  [TAG:JS-VERSION]           APP_VERSION constant — single source of truth for version number
   [TAG:JS-MODEL-INIT]        Model init, getProperties(), debug line
   [TAG:JS-BARS]              buildBars(), renderResult() — UI update per frame
   [TAG:JS-RESAMPLE]          resample() — linear interpolation, native→16kHz
@@ -1353,6 +1359,9 @@
   <script>
   (async () => {
     const $ = id => document.getElementById(id);
+    // [TAG:JS-VERSION] Single source of truth for app version number
+    const APP_VERSION = 'v5.6';
+    // [END:JS-VERSION]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
     const statusEl  = $('status');
     const debugInfoEl = $('debug-info');
@@ -2284,6 +2293,7 @@
     const NUM_SAMPLES = props.frame_sample_count || 16000;
 
     debugInfoEl.textContent = `freq=${MODEL_RATE} Hz | window=${NUM_SAMPLES} samples (${(NUM_SAMPLES/MODEL_RATE*1000).toFixed(0)} ms)`;
+    debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
     statusEl.textContent = 'Модель готова.';
     renderCard(false); // show first task card
 
