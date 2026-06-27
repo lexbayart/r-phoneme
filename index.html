@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-27  v5.11 (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-27  v5.12 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -90,6 +90,14 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+  v5.12 (2026-06-27)
+    - FIXED: CHANGELOG v5.8 typo — updateLevelAttempt →
+      updateLevelMonitor (correct function name)
+    - FIXED: sessionStartTime reset to null (was 0) in
+      switchTaskSet() — null correctly signals uninitialized
+      state; behavior unchanged since both are falsy [TAG:JS-MODE]
+    - Update APP_VERSION to 'v5.12' [TAG:JS-VERSION]
 
   v5.11 (2026-06-27)
     - FIXED: TAG structure — JS-LEVEL-CYCLE extracted from inside
@@ -1390,7 +1398,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v5.11';
+    const APP_VERSION = 'v5.12';
     // [END:JS-VERSION]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
     let confettiActive = false;
@@ -1648,7 +1656,7 @@
       cardIndex = 0;
       lLevelIdx = 0;
       lZoneStart = null;
-      sessionStartTime = 0; recStartTime = 0; // reset audio session for clean timestamps in new mode
+      sessionStartTime = null; recStartTime = 0; // reset audio session for clean timestamps in new mode
       activePreset = null;
       $('task-card').classList.remove('completed');
       btnStart.textContent = '▶ Начать';
