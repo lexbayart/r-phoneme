@@ -1,3 +1,5 @@
+![Screenshot](images/screenshot.png)
+
 # R-phoneme 🔷 [Beta]
 
 > Инструмент для сбора данных и дообучения нейросети распознавания звука «Р»
