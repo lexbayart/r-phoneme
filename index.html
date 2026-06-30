@@ -40,7 +40,7 @@
   purpose) — both are deliberate, permanent product decisions, not oversights.
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.6.0 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.10.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -127,6 +127,68 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+       v6.10.1 (2026-06-30)
+         - CHANGED: ZONE_HOLD_MS 0→180ms — at 0ms a single in-zone audio frame
+           was enough to pass a level, so a sudden loud spike right after a
+           quieter level (e.g. straight after «тихо») could instantly satisfy
+           «средне»/«громко» with no sustained voicing. 180ms requires the
+           level to stay in zone briefly before it counts, without feeling
+           laggy for a single syllable.   [TAG:JS-LEVEL-CYCLE-DATA]
+
+       v6.10.0 (2026-06-30)
+         - FIXED: completedCards tracked progress by numeric array index, which
+           would mis-attribute a user's completed cards to the WRONG card if
+           new cards are ever inserted in the middle of a MODES_* array, or
+           the array is reordered (only safe before this fix if new cards were
+           strictly appended at the end). Now tracks by each card's stable
+           `id` field instead — adding, reordering, or inserting cards
+           anywhere in a task-set's list no longer disturbs existing users'
+           progress on cards they already completed.
+         - ADDED: migrateCompletedIds() — one-time best-effort conversion of
+           old index-based saved progress (from profiles created before this
+           version) into the new id-based format on next profile load; saved
+           automatically in the new format from then on.
+           [TAG:JS-CARD-NAV] [TAG:JS-COMPLETED-ID-MIGRATION] [TAG:JS-LANDING]
+
+       v6.9.0 (2026-06-30)
+         - ADDED: two more rare replacement task-sets — «Замена Р→Н» (MODES_N,
+           5 cards: НА/НО/НУ/НЫ/НЭ) and «Замена Р→Г» (MODES_G, 5 cards:
+           ГА/ГО/ГУ/ГЫ/ГЭ) — same 3-level loudness mechanic (тихо/средне/громко)
+           as Л/В/Й. Extended completedCards, sessionStore, setModesFor,
+           TASK_SET_LABELS, updateTaskSetBtnCompletion, renderLanding tags, and
+           selectUser/persistUserProgress to cover the two new sets.
+           [TAG:JS-MODE] [TAG:JS-CARD-NAV] [TAG:JS-SESSION-STORE] [TAG:JS-LANDING]
+
+       v6.8.1 (2026-06-30)
+         - FIXED: initApp() built the entire UI (task card, card nav, the new
+           Задания/Настройки toggle) only AFTER the model finished loading —
+           if edge-impulse-standalone.js/.wasm failed to load or were missing
+           (e.g. testing index.html on its own, without the two companion
+           files), the whole interface silently never rendered past the
+           landing screen. UI now builds immediately; model load is awaited
+           separately and only gates the R-mode "Начать" button (existing
+           guard in startListening()), unchanged. [TAG:JS-MODEL-INIT]
+
+       v6.8.0 (2026-06-30)
+         - ADDED: right panel now shows the task card list (Задания) for the
+           «Правильное Р» set too — previously this card-nav list only existed
+           for Л/В/Й. Task list is the default/priority view in R mode.
+           [TAG:HTML-CARD-NAV] [TAG:JS-CARD-NAV]
+         - ADDED: «Задания» / «Настройки» toggle buttons in the right panel,
+           shown only in R mode, to switch between the task card list and the
+           neural-net tuning controls (presets/threshold/scale/normalization)
+           that used to be the only thing shown there.
+           [TAG:HTML-RIGHT-PANEL-VIEW-TOGGLE] [TAG:JS-MODE]
+         - CHANGED: buildCardNav()/renderCardNav() now run for every task-set
+           including R, instead of being skipped for R.
+
+       v6.7.0 (2026-06-30)
+         - CHANGED: user landing cards now only show progress/tags for task-sets
+           the user has actually started (done > 0) or completed — untouched
+           0/total sets are hidden entirely instead of showing a wall of zeros.
+           If no task-set has been started yet, shows "Занятия ещё не начаты".
+           [TAG:JS-LANDING]
 
        v6.6.0 (2026-06-30)
          - FIXED: audio (.wav) and log (.txt) downloads were silently concatenating
@@ -566,7 +628,8 @@
   [TAG:HTML-TASK-CARD]       Task card div in center panel — exercise per card/mode
   [TAG:HTML-MAIN-PANEL]      Center column — task card, bars, mic, start/stop
   [TAG:HTML-SETTINGS-PANEL]  Right column — presets, sliders
-  [TAG:HTML-CARD-NAV]        L task-set: card navigation list in right panel
+  [TAG:HTML-RIGHT-PANEL-VIEW-TOGGLE] R task-set only: Задания/Настройки toggle buttons
+  [TAG:HTML-CARD-NAV]        Card navigation list in right panel (all task-sets)
 
   JAVASCRIPT
   ──────────
@@ -618,7 +681,8 @@
   NORM_TARGET  = 16000  Target peak amplitude when normalization is ON
   NORM_MIN     = 500    Minimum peak below which normalization is skipped (silence guard)
 
-  ZONE_HOLD_MS       = 200   Min continuous in-zone time (ms) to pass a level in L mode
+  ZONE_HOLD_MS       = 180   Min continuous in-zone time (ms) to pass a level in L mode
+                              (v5.4 — softened to a single in-zone frame, was 200ms)
   WHISPER_THRESHOLD  = 0.5   Lower bound for Тихо level (mic%) — below this = silence
 
 ================================================================================
@@ -860,6 +924,8 @@
       --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
       --text: #e8eaf0; --muted: #6b7080;
       --r-color: #4fffb0; --noise-color: #ff4f6e; --accent: #7b61ff;
+      --profile-card-bg: #eaf6f0; --profile-card-border: #cfe8db;
+      --profile-card-text: #163328; --profile-card-muted: #4f6b5e;
     }
     html, body { height: 100%; }
     /* [END:CSS-VARIABLES] */
@@ -958,6 +1024,22 @@
     .task-set-btn.completed.active {
       border-color: var(--r-color);
       background: rgba(79,255,176,0.15);
+    }
+    #task-set-selector-universal {
+      padding: 0 10px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    .task-set-btn-universal {
+      width: 100%; padding: 9px 10px; font-size: 0.78rem; font-weight: 700;
+      border-style: dashed; border-color: rgba(123,97,255,0.45);
+      color: var(--accent); background: rgba(123,97,255,0.05);
+      letter-spacing: 0.02em;
+    }
+    .task-set-btn-universal:hover {
+      border-color: var(--accent); background: rgba(123,97,255,0.12); color: var(--accent);
+    }
+    .task-set-btn-universal.active {
+      border-style: solid; border-color: var(--accent);
+      background: rgba(123,97,255,0.16); color: var(--accent);
     }
 
     /* ── Центральная панель: приложение ── */
@@ -1170,56 +1252,56 @@
     /* Task card — replaces indicator circle in center panel */
     .task-card {
       width: 100%; max-width: 420px;
-      background: var(--surface);
-      border: 2px solid rgba(79,255,176,0.35);
+      background: var(--profile-card-bg);
+      border: 2px solid rgba(15,110,86,0.35);
       border-radius: 18px; padding: 28px 24px;
       display: flex; flex-direction: column; align-items: center;
       gap: 14px; text-align: center;
-      box-shadow: 0 0 18px rgba(79,255,176,0.07);
+      box-shadow: 0 0 18px rgba(79,255,176,0.12);
       transition: border-color 0.4s, box-shadow 0.4s;
     }
     .task-card.recording {
-      border-color: var(--r-color);
-      box-shadow: 0 0 20px rgba(79,255,176,0.25);
+      border-color: #0f6e56;
+      box-shadow: 0 0 20px rgba(79,255,176,0.35);
     }
     .task-card-number {
-      font-size: 0.68rem; font-weight: 700; color: var(--muted);
+      font-size: 0.68rem; font-weight: 700; color: var(--profile-card-muted);
       text-transform: uppercase; letter-spacing: 0.12em;
     }
     .task-card-emoji { font-size: 2.6rem; line-height: 1; }
-    .task-card-name  { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    .task-card-name  { font-size: 1.25rem; font-weight: 700; color: var(--profile-card-text); }
     .task-card-desc  {
       font-family: monospace; font-size: 0.95rem; font-weight: 700;
-      color: var(--r-color); padding: 10px 18px;
-      background: rgba(79,255,176,0.06); border-radius: 10px;
+      color: #0f6e56; padding: 10px 18px;
+      background: rgba(15,110,86,0.08); border-radius: 10px;
       width: 100%; word-break: break-all;
       position: relative; overflow: hidden;
     }
     #card-progress-bar {
       position: absolute; left: 0; top: 0; bottom: 0;
       width: 0%;
-      background: rgba(79,255,176,0.22);
+      background: rgba(15,110,86,0.18);
       pointer-events: none;
       border-radius: 10px;
     }
     #card-desc-text { position: relative; z-index: 1; }
     .task-card-hint  {
-      font-size: 0.82rem; color: var(--muted); line-height: 1.6;
+      font-size: 0.82rem; color: var(--profile-card-muted); line-height: 1.6;
       text-align: left; width: 100%;
     }
     .task-card-footer {
-      font-size: 0.82rem; color: var(--accent); font-weight: 600;
-      padding-top: 12px; border-top: 1px solid var(--border);
+      font-size: 0.82rem; color: #534ab7; font-weight: 600;
+      padding-top: 12px; border-top: 1px solid var(--profile-card-border);
       width: 100%; min-height: 1.4em;
     }
     .task-card.completed {
-      border-color: var(--r-color);
-      background: rgba(79,255,176,0.13);
-      box-shadow: 0 0 25px rgba(79,255,176,0.3);
+      border-color: #0f6e56;
+      background: #d8f0e3;
+      box-shadow: 0 0 25px rgba(79,255,176,0.4);
     }
     .task-card.completed .task-card-name,
     .task-card.completed .task-card-hint,
-    .task-card.completed .task-card-number { color: rgba(79,255,176,0.85); }
+    .task-card.completed .task-card-number { color: #0f6e56; }
     #confetti-canvas {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none; z-index: 9999;
@@ -1249,44 +1331,44 @@
     }
     .level-badge {
       flex: 1; min-width: 84px; border-radius: 12px;
-      border: 1px solid var(--border); background: rgba(123,97,255,0.05);
+      border: 1px solid var(--profile-card-border); background: rgba(83,74,183,0.06);
       padding: 10px 6px 8px; text-align: center; transition: all 0.2s;
     }
-    .level-badge .lvl-word { display: block; font-weight: 800; color: var(--text); line-height: 1; }
+    .level-badge .lvl-word { display: block; font-weight: 800; color: var(--profile-card-text); line-height: 1; }
     .level-badge.lvl-small  .lvl-word { font-size: 1.1rem;  }
     .level-badge.lvl-medium .lvl-word { font-size: 1.7rem;  }
     .level-badge.lvl-large  .lvl-word { font-size: 2.5rem;  }
     .level-badge .lvl-label {
-      margin-top: 6px; font-size: 0.68rem; font-weight: 700; color: var(--muted);
+      margin-top: 6px; font-size: 0.68rem; font-weight: 700; color: var(--profile-card-muted);
       text-transform: uppercase; letter-spacing: 0.06em;
     }
     .level-badge.active {
-      border-color: var(--accent); background: rgba(123,97,255,0.14);
-      box-shadow: 0 0 24px rgba(123,97,255,0.3);
+      border-color: #534ab7; background: rgba(83,74,183,0.16);
+      box-shadow: 0 0 24px rgba(83,74,183,0.25);
     }
-    .level-badge.active .lvl-label { color: var(--accent); }
+    .level-badge.active .lvl-label { color: #534ab7; }
     .level-badge.done {
-      border-color: var(--r-color); background: rgba(79,255,176,0.1);
+      border-color: #0f6e56; background: rgba(15,110,86,0.12);
     }
-    .level-badge.done .lvl-label { color: var(--r-color); }
+    .level-badge.done .lvl-label { color: #0f6e56; }
     .level-meter-track {
       display: none; width: 100%; height: 22px; border-radius: 11px;
-      background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+      background: rgba(15,110,86,0.08); border: 1px solid var(--profile-card-border);
       overflow: hidden; position: relative;
     }
     .level-meter-fill {
       position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
       border-radius: 11px; transition: width 0.08s linear, background-color 0.15s linear;
-      background: rgba(255,255,255,0.15); /* neutral, before any signal */
+      background: rgba(15,110,86,0.18); /* neutral, before any signal */
     }
-    .level-meter-fill.under { background: linear-gradient(90deg, #ffd24a, #ff9f43); }
-    .level-meter-fill.ok    { background: linear-gradient(90deg, #4fffb0, #2fd98f); }
-    .level-meter-fill.over  { background: linear-gradient(90deg, #ff6b6b, #ff3b3b); }
+    .level-meter-fill.under { background: linear-gradient(90deg, #f0a93f, #e3791f); }
+    .level-meter-fill.ok    { background: linear-gradient(90deg, #2fd98f, #0f6e56); }
+    .level-meter-fill.over  { background: linear-gradient(90deg, #e2554f, #c0392b); }
     .level-warning {
       min-height: 1.2em; font-size: 0.85rem; font-weight: 700;
-      color: #ff9f43; text-align: center; width: 100%; transition: color 0.15s;
+      color: #b9650f; text-align: center; width: 100%; transition: color 0.15s;
     }
-    .level-warning.ok { color: var(--r-color); }
+    .level-warning.ok { color: #0f6e56; }
     .level-warning.show { animation: warningPulse 0.4s ease; }
     @keyframes warningPulse {
       0%   { transform: scale(1);    }
@@ -1305,6 +1387,31 @@
     .landing-header { text-align: center; margin-bottom: 40px; }
     .landing-subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 8px; }
 
+    .landing-toolbar {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%; max-width: 860px; margin-bottom: 16px; gap: 12px;
+      flex-wrap: wrap;
+    }
+    .view-toggle {
+      display: flex; border: 1px solid var(--border); border-radius: 8px;
+      overflow: hidden;
+    }
+    .view-toggle-btn {
+      padding: 7px 12px; border: none; background: var(--surface);
+      color: var(--muted); cursor: pointer; font-size: 0.95rem;
+      line-height: 1; transition: all 0.15s;
+    }
+    .view-toggle-btn + .view-toggle-btn { border-left: 1px solid var(--border); }
+    .view-toggle-btn:hover { color: var(--text); }
+    .view-toggle-btn.active {
+      color: #0f6e56; background: rgba(79,255,176,0.12);
+    }
+    .sort-select {
+      padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); font-size: 0.8rem;
+      cursor: pointer;
+    }
+
     .user-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -1312,39 +1419,83 @@
       width: 100%; max-width: 860px;
     }
 
+    .user-grid.view-list {
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .user-row {
+      background: var(--profile-card-bg); border: 1px solid var(--profile-card-border);
+      border-radius: 10px; padding: 10px 16px;
+      display: flex; align-items: center; gap: 16px;
+      cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .user-row:hover {
+      border-color: rgba(15,110,86,0.45);
+      box-shadow: 0 0 14px rgba(79,255,176,0.18);
+    }
+    .user-row-name {
+      font-size: 0.92rem; font-weight: 700; color: var(--profile-card-text);
+      white-space: nowrap; min-width: 130px;
+    }
+    .user-row-age {
+      font-size: 0.68rem; font-weight: 600; color: var(--profile-card-muted);
+      background: #ffffff; border: 1px solid var(--profile-card-border);
+      border-radius: 20px; padding: 1px 8px; white-space: nowrap;
+    }
+    .user-row-last {
+      font-size: 0.72rem; color: var(--profile-card-muted);
+      white-space: nowrap; min-width: 130px;
+    }
+    .user-row-tags {
+      display: flex; gap: 6px; flex-wrap: nowrap; overflow-x: auto;
+      flex: 1; min-width: 0;
+    }
+    .user-row-tags::-webkit-scrollbar { height: 0; }
+    .user-row-actions {
+      display: flex; gap: 4px; align-items: center; margin-left: auto;
+    }
+    .user-row-new {
+      border: 2px dashed var(--profile-card-border); border-radius: 10px;
+      background: var(--profile-card-bg); color: var(--profile-card-muted);
+      display: flex; align-items: center; justify-content: center;
+      gap: 8px; padding: 10px 16px;
+      cursor: pointer; transition: border-color 0.2s, color 0.2s;
+      font-size: 0.82rem; font-weight: 600;
+    }
+    .user-row-new:hover { border-color: #0f6e56; color: #0f6e56; }
+
     .user-card-new {
-      border: 2px dashed var(--border); border-radius: 16px;
-      background: transparent; color: var(--muted);
+      border: 2px dashed var(--profile-card-border); border-radius: 16px;
+      background: var(--profile-card-bg); color: var(--profile-card-muted);
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       gap: 10px; min-height: 180px;
       cursor: pointer; transition: border-color 0.2s, color 0.2s;
       font-size: 0.85rem; font-weight: 600;
     }
-    .user-card-new:hover { border-color: var(--r-color); color: var(--r-color); }
+    .user-card-new:hover { border-color: #0f6e56; color: #0f6e56; }
     .user-card-new-icon { font-size: 2.2rem; }
 
     .user-card {
-      background: var(--surface); border: 1px solid var(--border);
+      background: var(--profile-card-bg); border: 1px solid var(--profile-card-border);
       border-radius: 16px; padding: 20px 18px;
       cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s;
       display: flex; flex-direction: column; gap: 10px;
     }
     .user-card:hover {
-      border-color: rgba(79,255,176,0.5);
-      box-shadow: 0 0 20px rgba(79,255,176,0.1);
+      border-color: rgba(15,110,86,0.45);
+      box-shadow: 0 0 20px rgba(79,255,176,0.18);
     }
     .user-card-header {
       display: flex; justify-content: space-between; align-items: flex-start;
     }
-    .user-card-name { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+    .user-card-name { font-size: 1.05rem; font-weight: 700; color: var(--profile-card-text); }
     .user-card-age {
-      font-size: 0.72rem; font-weight: 600; color: var(--muted);
-      background: var(--bg); border: 1px solid var(--border);
+      font-size: 0.72rem; font-weight: 600; color: var(--profile-card-muted);
+      background: #ffffff; border: 1px solid var(--profile-card-border);
       border-radius: 20px; padding: 2px 9px;
     }
     .user-card-last {
-      font-size: 0.7rem; color: var(--muted);
+      font-size: 0.7rem; color: var(--profile-card-muted);
     }
     .user-card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
     .user-card-tag {
@@ -1353,36 +1504,35 @@
       border: 1px solid;
     }
     .user-card-tag.r-done {
-      color: var(--r-color); border-color: rgba(79,255,176,0.4);
-      background: rgba(79,255,176,0.08);
+      color: #0f6e56; border-color: rgba(15,110,86,0.4);
+      background: rgba(31,158,117,0.16);
     }
     .user-card-tag.l-done {
-      color: var(--accent); border-color: rgba(123,97,255,0.4);
-      background: rgba(123,97,255,0.08);
+      color: #534ab7; border-color: rgba(83,74,183,0.4);
+      background: rgba(83,74,183,0.12);
     }
     .user-card-tag.in-progress {
-      color: var(--muted); border-color: var(--border); background: transparent;
+      color: var(--profile-card-muted); border-color: var(--profile-card-border); background: transparent;
     }
     .user-card-edit-btn {
       background: none; border: none; cursor: pointer;
       font-size: 0.85rem; padding: 2px 4px; border-radius: 4px;
-      opacity: 0.4; transition: opacity 0.15s;
-      line-height: 1;
+      opacity: 0.5; transition: opacity 0.15s;
+      line-height: 1; color: var(--profile-card-text);
     }
     .user-card:hover .user-card-edit-btn { opacity: 1; }
     .user-card-delete-btn {
       background: none; border: none; cursor: pointer;
       font-size: 0.85rem; padding: 2px 4px; border-radius: 4px;
-      opacity: 0.4; transition: opacity 0.15s; color: #f66;
+      opacity: 0.5; transition: opacity 0.15s; color: #c0392b;
       line-height: 1;
     }
     .user-card:hover .user-card-delete-btn { opacity: 1; }
-    .user-card-delete-btn:hover { color: #f33; opacity: 1 !important; }
+    .user-card-delete-btn:hover { color: #a02a20; opacity: 1 !important; }
 
-    .user-card-progress {
-      font-size: 0.72rem; color: var(--muted);
+    .user-card-empty {
+      font-size: 0.72rem; color: var(--profile-card-muted); font-style: italic;
     }
-    .user-card-progress strong { color: var(--text); }
 
     .modal-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.7);
@@ -1390,19 +1540,20 @@
       backdrop-filter: blur(4px);
     }
     .modal-box {
-      background: var(--surface); border: 1px solid var(--border);
+      background: var(--profile-card-bg); border: 1px solid var(--profile-card-border);
       border-radius: 18px; padding: 28px 24px;
       width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 16px;
     }
-    .modal-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+    .modal-title { font-size: 1.1rem; font-weight: 700; color: var(--profile-card-text); }
     .modal-field { display: flex; flex-direction: column; gap: 6px; }
-    .modal-field label { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    .modal-field label { font-size: 0.75rem; color: var(--profile-card-muted); font-weight: 600; }
     .modal-field input {
-      background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
-      padding: 10px 12px; color: var(--text); font-size: 0.9rem; font-family: 'Inter', sans-serif;
+      background: #ffffff; border: 1px solid var(--profile-card-border); border-radius: 9px;
+      padding: 10px 12px; color: var(--profile-card-text); font-size: 0.9rem; font-family: 'Inter', sans-serif;
       outline: none; transition: border-color 0.15s;
     }
-    .modal-field input:focus { border-color: var(--r-color); }
+    .modal-field input::placeholder { color: #8a9990; }
+    .modal-field input:focus { border-color: #0f6e56; }
     .modal-actions { display: flex; gap: 10px; margin-top: 4px; }
     .modal-btn-primary {
       flex: 1; padding: 11px; border-radius: 10px; border: none;
@@ -1410,8 +1561,8 @@
       font-size: 0.9rem; cursor: pointer;
     }
     .modal-btn-secondary {
-      padding: 11px 18px; border-radius: 10px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); font-weight: 600;
+      padding: 11px 18px; border-radius: 10px; border: 1px solid var(--profile-card-border);
+      background: transparent; color: var(--profile-card-muted); font-weight: 600;
       font-size: 0.9rem; cursor: pointer;
     }
 
@@ -1438,6 +1589,17 @@
       <h1>Детектор <span>«Р»</span></h1>
       <p class="landing-subtitle">Выберите профиль или создайте новый</p>
       <p class="landing-version" id="landing-version"></p>
+    </div>
+    <div class="landing-toolbar">
+      <div class="view-toggle" role="group" aria-label="Вид списка профилей">
+        <button id="view-grid-btn" class="view-toggle-btn" title="Плитки">▦</button>
+        <button id="view-list-btn" class="view-toggle-btn" title="Список">≡</button>
+      </div>
+      <select id="sort-select" class="sort-select" title="Сортировка">
+        <option value="recent">Сначала недавние</option>
+        <option value="name">По имени (А–Я)</option>
+        <option value="progress">По прогрессу</option>
+      </select>
     </div>
     <div id="user-grid" class="user-grid">
     </div>
@@ -1483,6 +1645,11 @@
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
         <button class="task-set-btn"        id="btn-set-v">Замена Р→В</button>
         <button class="task-set-btn"        id="btn-set-y">Замена Р→Й</button>
+        <button class="task-set-btn"        id="btn-set-n">Замена Р→Н</button>
+        <button class="task-set-btn"        id="btn-set-g">Замена Р→Г</button>
+      </div>
+      <div id="task-set-selector-universal">
+        <button class="task-set-btn task-set-btn-universal" id="btn-set-u">🎙️ Универсальное задание</button>
       </div>
         <div class="panel-title">
           <span>ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
@@ -1564,7 +1731,16 @@
     <!-- [TAG:HTML-SETTINGS-PANEL] ──────────────────────────────── -->
     <div class="panel-settings">
 
-      <!-- [TAG:HTML-CARD-NAV] L task-set: card navigation list (replaces L notice) -->
+      <!-- [TAG:HTML-RIGHT-PANEL-VIEW-TOGGLE] R task-set only: switch between task card list and neural-net settings -->
+      <div id="right-panel-view-toggle" class="settings-section" style="display:none; padding-bottom:0;">
+        <div style="display:flex; gap:6px;">
+          <button class="task-set-btn" id="btn-view-tasks" style="flex:1;">📋 Задания</button>
+          <button class="task-set-btn" id="btn-view-settings" style="flex:1;">⚙️ Настройки</button>
+        </div>
+      </div>
+      <!-- [END:HTML-RIGHT-PANEL-VIEW-TOGGLE] -->
+
+      <!-- [TAG:HTML-CARD-NAV] Card navigation list — shown for all task-sets; for R it shares the panel with settings via the toggle above -->
       <div id="card-nav-l" class="settings-section">
         <div class="settings-label">Задания</div>
         <div style="display:flex;flex-direction:column;gap:6px" id="card-nav-list"></div>
@@ -1717,7 +1893,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-      const APP_VERSION = 'v6.6.0';
+      const APP_VERSION = 'v6.10.1';
     // [END:JS-VERSION]
     document.getElementById('landing-version').textContent = 'Версия ' + APP_VERSION;
 
@@ -1737,7 +1913,7 @@
         age: 6,
         createdAt: "2026-05-10T09:00:00Z",
         lastSessionAt: "2026-06-28T14:30:00Z",
-        completedCards: { r: [0, 1, 2], l: [0, 1], v: [], y: [] }
+        completedCards: { r: [0, 1, 2], l: [0, 1], v: [], y: [], n: [], g: [] }
       },
       {
         id: "user_demo_2",
@@ -1746,7 +1922,7 @@
         age: 5,
         createdAt: "2026-05-18T10:00:00Z",
         lastSessionAt: "2026-06-25T11:00:00Z",
-        completedCards: { r: [0, 1, 2, 3, 4, 5], l: [0, 1, 2, 3, 4], v: [], y: [] }
+        completedCards: { r: [0, 1, 2, 3, 4, 5], l: [0, 1, 2, 3, 4], v: [], y: [], n: [], g: [] }
       },
       {
         id: "user_demo_3",
@@ -1755,7 +1931,7 @@
         age: 7,
         createdAt: "2026-06-01T08:00:00Z",
         lastSessionAt: "2026-06-29T16:00:00Z",
-        completedCards: { r: [0], l: [], v: [], y: [] }
+        completedCards: { r: [0], l: [], v: [], y: [], n: [], g: [] }
       }
     ];
 
@@ -1795,76 +1971,170 @@
       return 'Последняя: ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
     }
 
+    // [TAG:JS-LANDING-VIEW] Tiles/list toggle + sort order for the profile
+    // landing screen. Persisted in localStorage so the choice survives reload.
+    const STORAGE_KEY_VIEW_MODE = 'rph_landing_view';
+    const STORAGE_KEY_SORT_MODE = 'rph_landing_sort';
+    let landingViewMode = localStorage.getItem(STORAGE_KEY_VIEW_MODE) || 'grid'; // 'grid' | 'list'
+    let landingSortMode = localStorage.getItem(STORAGE_KEY_SORT_MODE) || 'recent'; // 'recent' | 'name' | 'progress'
+
+    function totalProgress(user) {
+      return ['r','l','v','y','n','g'].reduce((sum, set) => sum + (user.completedCards?.[set]?.length || 0), 0);
+    }
+
+    function sortUsers(users) {
+      const list = users.slice();
+      if (landingSortMode === 'name') {
+        list.sort((a, b) => `${a.name}${a.surname || ''}`.localeCompare(`${b.name}${b.surname || ''}`, 'ru'));
+      } else if (landingSortMode === 'progress') {
+        list.sort((a, b) => totalProgress(b) - totalProgress(a));
+      } else { // 'recent' — most recently active first, never-started users last
+        list.sort((a, b) => {
+          const at = a.lastSessionAt ? new Date(a.lastSessionAt).getTime() : -1;
+          const bt = b.lastSessionAt ? new Date(b.lastSessionAt).getTime() : -1;
+          return bt - at;
+        });
+      }
+      return list;
+    }
+
+    function applyLandingViewButtons() {
+      $('view-grid-btn').classList.toggle('active', landingViewMode === 'grid');
+      $('view-list-btn').classList.toggle('active', landingViewMode === 'list');
+      $('sort-select').value = landingSortMode;
+    }
+
+    function buildUserTagsHtml(user) {
+      const rDone = (user.completedCards?.r || []).length;
+      const lDone = (user.completedCards?.l || []).length;
+      const vDone = (user.completedCards?.v || []).length;
+      const yDone = (user.completedCards?.y || []).length;
+      const nDone = (user.completedCards?.n || []).length;
+      const gDone = (user.completedCards?.g || []).length;
+      const rTotal = MODES_R ? MODES_R.length : 6;
+      const lTotal = MODES_L ? MODES_L.length : 10;
+      const vTotal = MODES_V ? MODES_V.length : 5;
+      const yTotal = MODES_Y ? MODES_Y.length : 5;
+      const nTotal = MODES_N ? MODES_N.length : 5;
+      const gTotal = MODES_G ? MODES_G.length : 5;
+
+      // Only show a task-set's tag if the user has actually started it (done > 0)
+      // or finished it. Untouched (0/total) sets are omitted entirely — no point
+      // showing a wall of zeros for tasks never attempted.
+      const taskSets = [
+        { shortLabel: 'Р',    done: rDone, total: rTotal, complete: rDone >= rTotal },
+        { shortLabel: 'Р→Л',  done: lDone, total: lTotal, complete: lDone >= lTotal },
+        { shortLabel: 'Р→В',  done: vDone, total: vTotal, complete: vDone >= vTotal },
+        { shortLabel: 'Р→Й',  done: yDone, total: yTotal, complete: yDone >= yTotal },
+        { shortLabel: 'Р→Н',  done: nDone, total: nTotal, complete: nDone >= nTotal },
+        { shortLabel: 'Р→Г',  done: gDone, total: gTotal, complete: gDone >= gTotal },
+      ];
+      const startedSets = taskSets.filter(t => t.done > 0);
+
+      return startedSets.length
+        ? startedSets.map(t => t.complete
+            ? `<span class="user-card-tag r-done">✓ ${escapeHtml(t.shortLabel)} завершён</span>`
+            : `<span class="user-card-tag in-progress">${escapeHtml(t.shortLabel)}: ${t.done}/${t.total}</span>`
+          ).join('')
+        : `<span class="user-card-empty">Занятия ещё не начаты</span>`;
+    }
+
     function renderLanding() {
       const grid = document.getElementById('user-grid');
-      const users = getAllUsers();
+      const users = sortUsers(getAllUsers());
       grid.innerHTML = '';
+      grid.classList.toggle('view-list', landingViewMode === 'list');
+      applyLandingViewButtons();
 
-      const newCard = document.createElement('div');
-      newCard.className = 'user-card-new';
-      newCard.innerHTML = '<div class="user-card-new-icon">＋</div><span>Новый пользователь</span>';
-      newCard.addEventListener('click', openCreateModal);
-      grid.appendChild(newCard);
+      if (landingViewMode === 'list') {
+        const newRow = document.createElement('div');
+        newRow.className = 'user-row-new';
+        newRow.innerHTML = '<span>＋</span><span>Новый пользователь</span>';
+        newRow.addEventListener('click', openCreateModal);
+        grid.appendChild(newRow);
+      } else {
+        const newCard = document.createElement('div');
+        newCard.className = 'user-card-new';
+        newCard.innerHTML = '<div class="user-card-new-icon">＋</div><span>Новый пользователь</span>';
+        newCard.addEventListener('click', openCreateModal);
+        grid.appendChild(newCard);
+      }
 
       users.forEach(user => {
-        const rDone = (user.completedCards?.r || []).length;
-        const lDone = (user.completedCards?.l || []).length;
-        const vDone = (user.completedCards?.v || []).length;
-        const yDone = (user.completedCards?.y || []).length;
-        const rTotal = MODES_R ? MODES_R.length : 6;
-        const lTotal = MODES_L ? MODES_L.length : 10;
-        const vTotal = MODES_V ? MODES_V.length : 5;
-        const yTotal = MODES_Y ? MODES_Y.length : 5;
-        const rComplete = rDone >= rTotal;
-        const lComplete = lDone >= lTotal;
-        const vComplete = vDone >= vTotal;
-        const yComplete = yDone >= yTotal;
+        const tagsHtml = buildUserTagsHtml(user);
+        const el = document.createElement('div');
 
-        const card = document.createElement('div');
-        card.className = 'user-card';
-        card.innerHTML = `
-          <div class="user-card-header">
-            <div class="user-card-name">${escapeHtml(user.name)}${user.surname ? ' ' + escapeHtml(user.surname) : ''}</div>
-            <div style="display:flex;gap:6px;align-items:center;">
+        if (landingViewMode === 'list') {
+          el.className = 'user-row';
+          el.innerHTML = `
+            <div class="user-row-name">${escapeHtml(user.name)}${user.surname ? ' ' + escapeHtml(user.surname) : ''}</div>
+            <div class="user-row-age">${user.age ? user.age + ' лет' : '—'}</div>
+            <div class="user-row-last">${formatLastSession(user.lastSessionAt)}</div>
+            <div class="user-row-tags">${tagsHtml}</div>
+            <div class="user-row-actions">
               <button class="user-card-edit-btn" data-id="${user.id}" title="Редактировать">✏️</button>
               <button class="user-card-delete-btn" data-id="${user.id}" title="Удалить">✕</button>
-              <div class="user-card-age">${user.age ? user.age + ' лет' : '—'}</div>
             </div>
-          </div>
-          <div class="user-card-last">${formatLastSession(user.lastSessionAt)}</div>
-          <div class="user-card-progress">
-            Правильное Р: <strong>${rDone}/${rTotal}</strong> ·
-            Замена Р→Л: <strong>${lDone}/${lTotal}</strong> ·
-            Замена Р→В: <strong>${vDone}/${vTotal}</strong> ·
-            Замена Р→Й: <strong>${yDone}/${yTotal}</strong>
-          </div>
-          <div class="user-card-tags">
-            ${rComplete
-               ? '<span class="user-card-tag r-done">✓ Р завершён</span>'
-               : '<span class="user-card-tag in-progress">Р: ' + rDone + '/' + rTotal + '</span>'}
-            ${lComplete
-               ? '<span class="user-card-tag l-done">✓ Р→Л завершён</span>'
-               : '<span class="user-card-tag in-progress">Р→Л: ' + lDone + '/' + lTotal + '</span>'}
-            ${vComplete
-               ? '<span class="user-card-tag r-done">✓ Р→В завершён</span>'
-               : '<span class="user-card-tag in-progress">Р→В: ' + vDone + '/' + vTotal + '</span>'}
-            ${yComplete
-               ? '<span class="user-card-tag l-done">✓ Р→Й завершён</span>'
-               : '<span class="user-card-tag in-progress">Р→Й: ' + yDone + '/' + yTotal + '</span>'}
-          </div>
-        `;
-        card.addEventListener('click', () => selectUser(user));
-        card.querySelector('.user-card-edit-btn').addEventListener('click', (e) => {
+          `;
+        } else {
+          el.className = 'user-card';
+          el.innerHTML = `
+            <div class="user-card-header">
+              <div class="user-card-name">${escapeHtml(user.name)}${user.surname ? ' ' + escapeHtml(user.surname) : ''}</div>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <button class="user-card-edit-btn" data-id="${user.id}" title="Редактировать">✏️</button>
+                <button class="user-card-delete-btn" data-id="${user.id}" title="Удалить">✕</button>
+                <div class="user-card-age">${user.age ? user.age + ' лет' : '—'}</div>
+              </div>
+            </div>
+            <div class="user-card-last">${formatLastSession(user.lastSessionAt)}</div>
+            <div class="user-card-tags">${tagsHtml}</div>
+          `;
+        }
+
+        el.addEventListener('click', () => selectUser(user));
+        el.querySelector('.user-card-edit-btn').addEventListener('click', (e) => {
           e.stopPropagation();
           openEditModal(user);
         });
-        card.querySelector('.user-card-delete-btn').addEventListener('click', (e) => {
+        el.querySelector('.user-card-delete-btn').addEventListener('click', (e) => {
           e.stopPropagation();
           deleteProfile(user);
         });
-        grid.appendChild(card);
+        grid.appendChild(el);
       });
     }
+
+    $('view-grid-btn').addEventListener('click', () => {
+      landingViewMode = 'grid';
+      localStorage.setItem(STORAGE_KEY_VIEW_MODE, landingViewMode);
+      renderLanding();
+    });
+    $('view-list-btn').addEventListener('click', () => {
+      landingViewMode = 'list';
+      localStorage.setItem(STORAGE_KEY_VIEW_MODE, landingViewMode);
+      renderLanding();
+    });
+    $('sort-select').addEventListener('change', (e) => {
+      landingSortMode = e.target.value;
+      localStorage.setItem(STORAGE_KEY_SORT_MODE, landingSortMode);
+      renderLanding();
+    });
+
+    // [TAG:JS-COMPLETED-ID-MIGRATION] ─────────────────────────────────────
+    // Older saved profiles (before this version) stored completedCards as
+    // numeric array indices instead of stable card `id` strings. This converts
+    // old numeric entries to ids on load, using the CURRENT card order as a
+    // best-effort mapping (only matters for data saved before this fix —
+    // any profile saved after this point already stores ids and passes
+    // through unchanged).
+    function migrateCompletedIds(savedArr, modesArr) {
+      if (!Array.isArray(savedArr)) return [];
+      return savedArr
+        .map(v => (typeof v === 'number' ? (modesArr[v] ? modesArr[v].id : null) : v))
+        .filter(Boolean);
+    }
+    // [END:JS-COMPLETED-ID-MIGRATION]
 
     function selectUser(user) {
       activeUser = user;
@@ -1874,12 +2144,25 @@
       sessionStore.l = emptySessionState();
       sessionStore.v = emptySessionState();
       sessionStore.y = emptySessionState();
+      sessionStore.n = emptySessionState();
+      sessionStore.g = emptySessionState();
+      sessionStore.u = emptySessionState();
       loadSessionState(currentTaskSet); // binds logLines/wavChunks/etc to the fresh buffer, redraws (empty) log
 
-      completedCards.r = new Set(user.completedCards?.r || []);
-      completedCards.l = new Set(user.completedCards?.l || []);
-      completedCards.v = new Set(user.completedCards?.v || []);
-      completedCards.y = new Set(user.completedCards?.y || []);
+      // Universal attempts are NOT backed by persisted audio — wavChunks
+      // only ever live in the in-memory sessionStore, which was just wiped
+      // above. So restoring old "Попытка N" cards/count from localStorage
+      // would show attempts the user can no longer download — instead,
+      // always start the universal set fresh with a single open attempt.
+      MODES_U.length = 0;
+      ensureUniversalCount(1);
+      completedCards.r = new Set(migrateCompletedIds(user.completedCards?.r || [], MODES_R));
+      completedCards.l = new Set(migrateCompletedIds(user.completedCards?.l || [], MODES_L));
+      completedCards.v = new Set(migrateCompletedIds(user.completedCards?.v || [], MODES_V));
+      completedCards.y = new Set(migrateCompletedIds(user.completedCards?.y || [], MODES_Y));
+      completedCards.n = new Set(migrateCompletedIds(user.completedCards?.n || [], MODES_N));
+      completedCards.g = new Set(migrateCompletedIds(user.completedCards?.g || [], MODES_G));
+      completedCards.u = new Set(); // reset alongside MODES_U above
 
       document.getElementById('landing-screen').style.display = 'none';
       document.getElementById('app-screen').style.display = 'flex';
@@ -1889,7 +2172,8 @@
       } else {
         cardIndex = (currentTaskSet === 'r') ? firstUnfinishedIndex(MODES_R, completedCards.r) : firstUnfinishedIndex(MODES, completedCards[currentTaskSet]);
         renderCard(false);
-        renderCardNav();
+        buildCardNav();
+        updateRightPanelView();
         updateTaskSetBtnCompletion();
       }
     }
@@ -1900,7 +2184,10 @@
         r: [...completedCards.r],
         l: [...completedCards.l],
         v: [...completedCards.v],
-        y: [...completedCards.y]
+        y: [...completedCards.y],
+        n: [...completedCards.n],
+        g: [...completedCards.g],
+        u: [...completedCards.u]
       };
       activeUser.lastSessionAt = new Date().toISOString();
       saveUser(activeUser);
@@ -1956,7 +2243,7 @@
           name, surname, age: isNaN(age) ? null : age,
           createdAt: new Date().toISOString(),
           lastSessionAt: null,
-          completedCards: { r: [], l: [], v: [], y: [] }
+          completedCards: { r: [], l: [], v: [], y: [], n: [], g: [] }
         };
         saveUser(newUser);
         closeCreateModal();
@@ -1977,15 +2264,21 @@
       const lTotal = MODES_L.length;
       const vTotal = MODES_V.length;
       const yTotal = MODES_Y.length;
+      const nTotal = MODES_N.length;
+      const gTotal = MODES_G.length;
       const btnR = document.getElementById('btn-set-r');
       const btnL = document.getElementById('btn-set-l');
       const btnV = document.getElementById('btn-set-v');
       const btnY = document.getElementById('btn-set-y');
-      if (!btnR || !btnL || !btnV || !btnY || !activeUser) return;
+      const btnN = document.getElementById('btn-set-n');
+      const btnG = document.getElementById('btn-set-g');
+      if (!btnR || !btnL || !btnV || !btnY || !btnN || !btnG || !activeUser) return;
       btnR.classList.toggle('completed', completedCards.r.size >= rTotal);
       btnL.classList.toggle('completed', completedCards.l.size >= lTotal);
       btnV.classList.toggle('completed', completedCards.v.size >= vTotal);
       btnY.classList.toggle('completed', completedCards.y.size >= yTotal);
+      btnN.classList.toggle('completed', completedCards.n.size >= nTotal);
+      btnG.classList.toggle('completed', completedCards.g.size >= gTotal);
     }
 
     function deleteProfile(user) {
@@ -2108,7 +2401,10 @@
       {
         id: 'crescendo', emoji: '📈', name: 'Нарастание',
         desc: 'р (тихо)  →  р (громче)  →  р (громко)',
-        hint: 'Начинайте очень тихо и постепенно увеличивайте громкость до максимума. Варьируйте интенсивность: шёпот → обычный голос → в полную силу. Повторите цикл несколько раз.'
+        hint: 'Скажите «Р» тихо, затем средней громкости, затем громко — по очереди, как и в остальных заданиях на громкость.',
+        sound: 'Р', useLevelMechanic: true // exception: this R-card uses the same Тихо/Средне/Громко
+                                            // mic-level mechanic as the L/V/Y/N/G task-sets, not the
+                                            // classifier preset-cycle the other R-cards use. [TAG:JS-MODE]
       },
       {
         id: 'high', emoji: '🔼', name: 'Высокий тон',
@@ -2192,6 +2488,69 @@
         hint: 'Произносите слог «йы» три раза подряд — тихо, средней громкости и громко. Слог ЙЫ — замена слогу РЫ.' },
     ];
 
+    // ── Редкие замены (v6.9) ──────────────────────────────────────────────
+    const MODES_N = [
+      { id: 'na', emoji: '🟤', name: 'НА — вместо РА', sound: 'НА',
+        hint: 'Произносите слог «на» три раза подряд — тихо, средней громкости и громко. Кончик языка у верхних зубов, воздух идёт через нос. Это редкая замена — слог НА вместо РА.' },
+      { id: 'no', emoji: '🟫', name: 'НО — вместо РО', sound: 'НО',
+        hint: 'Произносите слог «но» три раза подряд — тихо, средней громкости и громко. Губы округлены. Редкая замена — слог НО вместо РО.' },
+      { id: 'nu', emoji: '🔘', name: 'НУ — вместо РУ', sound: 'НУ',
+        hint: 'Произносите слог «ну» три раза подряд — тихо, средней громкости и громко. Губы вытянуты вперёд. Редкая замена — слог НУ вместо РУ.' },
+      { id: 'ny', emoji: '⚪', name: 'НЫ — вместо РЫ', sound: 'НЫ',
+        hint: 'Произносите слог «ны» три раза подряд — тихо, средней громкости и громко. Редкая замена — слог НЫ вместо РЫ.' },
+      { id: 'ne', emoji: '⚫', name: 'НЭ — вместо РЭ', sound: 'НЭ',
+        hint: 'Произносите слог «нэ» три раза подряд — тихо, средней громкости и громко. Редкая замена — слог НЭ вместо РЭ.' },
+    ];
+
+    const MODES_G = [
+      { id: 'ga', emoji: '🟧', name: 'ГА — вместо РА', sound: 'ГА',
+        hint: 'Произносите слог «га» три раза подряд — тихо, средней громкости и громко. Звук образуется в задней части горла. Это редкая замена — слог ГА вместо РА.' },
+      { id: 'go', emoji: '🟨', name: 'ГО — вместо РО', sound: 'ГО',
+        hint: 'Произносите слог «го» три раза подряд — тихо, средней громкости и громко. Губы округлены. Редкая замена — слог ГО вместо РО.' },
+      { id: 'gu', emoji: '🟩', name: 'ГУ — вместо РУ', sound: 'ГУ',
+        hint: 'Произносите слог «гу» три раза подряд — тихо, средней громкости и громко. Губы вытянуты вперёд. Редкая замена — слог ГУ вместо РУ.' },
+      { id: 'gy', emoji: '🟦', name: 'ГЫ — вместо РЫ', sound: 'ГЫ',
+        hint: 'Произносите слог «гы» три раза подряд — тихо, средней громкости и громко. Редкая замена — слог ГЫ вместо РЫ.' },
+      { id: 'ge', emoji: '🟪', name: 'ГЭ — вместо РЭ', sound: 'ГЭ',
+        hint: 'Произносите слог «гэ» три раза подряд — тихо, средней громкости и громко. Редкая замена — слог ГЭ вместо РЭ.' },
+    ];
+
+    // [TAG:JS-MODES-U] ─────────────────────────────────────────────────────
+    // "Универсальное задание" — an open-ended, self-growing task list for any
+    // speech sound not covered by the fixed sets above. Pure volume-level
+    // mechanic (tихо/средне/громко), no classifier involved — there's no
+    // trained model for an arbitrary sound, so this card just records it for
+    // later manual review/retraining. Unlike MODES_R/L/V/Y/N/G, this array
+    // is NOT a fixed const list: ensureUniversalCount() appends a fresh
+    // "Попытка N" card whenever the last one gets completed, so the user can
+    // keep recording attempts indefinitely until they decide they have
+    // enough material and download the audio/log from the header buttons.
+    const MODES_U = [];
+    function ensureUniversalCount(n) {
+      while (MODES_U.length < n) {
+        const idx = MODES_U.length + 1;
+        MODES_U.push({
+          id: 'attempt' + idx,
+          emoji: '🎙️',
+          name: 'Попытка ' + idx,
+          sound: 'звук',
+          hint: 'Этого звука нет в готовых заданиях — запишите его сами. Произнесите его три раза подряд: тихо, средней громкости и громко, как и в остальных заданиях. После завершения появится возможность записать ещё одну попытку.',
+        });
+      }
+    }
+    ensureUniversalCount(1); // always start with at least one open attempt
+    // Returns the index of the next not-yet-completed universal card,
+    // growing the list first if every existing attempt is already done
+    // (e.g. the user left the 'u' set after finishing all attempts and came
+    // back later — they should land on a fresh attempt, not a finished one).
+    function getUniversalCardIndex() {
+      if (MODES_U.every(m => completedCards.u.has(m.id))) {
+        ensureUniversalCount(MODES_U.length + 1);
+      }
+      return firstUnfinishedIndex(MODES_U, completedCards.u);
+    }
+    // [END:JS-MODES-U]
+
     // [TAG:JS-LEVEL-CYCLE-DATA] ──────────────────────────────────────────────
     // 3 loudness levels for the L task-set. Bounds are in the same units as
     // micLevel.style.width — i.e. Math.sqrt(meanSquare)*500 clamped to [0,100].
@@ -2220,7 +2579,7 @@
       { key: 'loud',   label: 'Громко', sizeClass: 'lvl-large',  min: 18,
         quietMsg: 'Громче — пусть слог прозвучит уверенно 📢' },
     ];
-    const ZONE_HOLD_MS = 200; // how long the level must stay in-zone before it's counted as passed
+    const ZONE_HOLD_MS = 180; // min continuous in-zone time (v6.10.1 — restored small debounce: at 0ms a single transient spike right after a quieter level instantly satisfied the next level, e.g. a sudden loud sound immediately after "тихо" would instantly pass "средне". 180ms is short enough not to feel laggy for a syllable, but long enough that a single stray frame can't trigger a pass.
     const WHISPER_THRESHOLD = 0.5; // mic% below this = silence, not a valid Тихо attempt
     // [END:JS-LEVEL-CYCLE-DATA]
 
@@ -2229,10 +2588,12 @@
 
     // [TAG:JS-CARD-NAV] ──────────────────────────────────────────────────────
     // L task-set: card navigation list in the right panel.
-    // completedCards[set] tracks which cardIndex values have been completed.
+    // completedCards[set] tracks which card `id` strings have been completed
+    // (NOT array indices — ids are stable even if cards are later reordered,
+    // inserted, or appended, so old progress never gets mis-attributed).
     // buildCardNav()  — rebuilds the #card-nav-list DOM buttons (call once on switch to L).
     // renderCardNav() — refreshes button classes: done/current/pending (call on card change).
-    const completedCards = { r: new Set(), l: new Set(), v: new Set(), y: new Set() };
+    const completedCards = { r: new Set(), l: new Set(), v: new Set(), y: new Set(), n: new Set(), g: new Set(), u: new Set() };
 
     // [TAG:JS-SESSION-STORE] ──────────────────────────────────────────────
     // Each task-set (r/l/v/y) keeps its OWN independent log + audio recording
@@ -2245,11 +2606,14 @@
       return {
         logLines: [], wavChunks: [], wavTotalSmp: 0,
         recStartTime: 0, recStopTime: 0, sessionStartTime: 0, sessionLogStart: 0,
+        lastCardCompletedAt: 0, // wall-clock ms of the last card finished in this task-set (0 = none yet)
       };
     }
     const sessionStore = {
       r: emptySessionState(), l: emptySessionState(),
       v: emptySessionState(), y: emptySessionState(),
+      n: emptySessionState(), g: emptySessionState(),
+      u: emptySessionState(),
     };
 
     // Redraws #log-list from the currently-bound logLines array (used after
@@ -2280,6 +2644,7 @@
       sessionStore[set] = {
         logLines, wavChunks, wavTotalSmp,
         recStartTime, recStopTime, sessionStartTime, sessionLogStart,
+        lastCardCompletedAt,
       };
     }
 
@@ -2294,6 +2659,7 @@
       recStopTime     = st.recStopTime;
       sessionStartTime = st.sessionStartTime;
       sessionLogStart  = st.sessionLogStart;
+      lastCardCompletedAt = st.lastCardCompletedAt || 0;
       renderLogList();
       const dlBtn = $('btn-download-audio');
       if (wavTotalSmp > 0) {
@@ -2328,7 +2694,7 @@
     function renderCardNav() {
       const btns = $('card-nav-list').querySelectorAll('.card-nav-btn');
       btns.forEach((btn, i) => {
-        const done    = completedCards[currentTaskSet].has(i);
+        const done    = completedCards[currentTaskSet].has(MODES[i].id);
         const current = i === cardIndex;
         btn.className = 'card-nav-btn' +
           (done    ? ' done'    : '') +
@@ -2355,21 +2721,38 @@
     let lLevelIdx = 0;       // current LEVELS_L index (0..2) for the active L card
     let lZoneStart = null;   // Date.now() timestamp when mic entered the target zone (null = not in zone)
 
+    // Tracks completion by card `id` (stable string), not array index — so
+    // inserting/reordering/adding cards in MODES_* later never mis-attributes
+    // a different card's "done" status to an unrelated one. See [TAG:JS-CARD-NAV].
     function firstUnfinishedIndex(modesArr, doneSet) {
       for (let i = 0; i < modesArr.length; i++) {
-        if (!doneSet.has(i)) return i;
+        if (!doneSet.has(modesArr[i].id)) return i;
       }
       return 0;
+    }
+
+    // Unified "which card to land on when entering/reloading a task-set"
+    // logic. 'u' (universal) is special: it must never fall back to index 0
+    // (an already-finished attempt) the way fixed sets do once everything is
+    // done — it should grow and offer a fresh attempt instead. See
+    // [TAG:JS-MODES-U].
+    function computeCardIndexFor(set) {
+      if (set === 'r') return firstUnfinishedIndex(MODES_R, completedCards.r);
+      if (set === 'u') return getUniversalCardIndex();
+      return firstUnfinishedIndex(setModesFor(set), completedCards[set]);
     }
 
     function setModesFor(set) {
       if (set === 'r') return MODES_R;
       if (set === 'l') return MODES_L;
       if (set === 'v') return MODES_V;
-      return MODES_Y;
+      if (set === 'y') return MODES_Y;
+      if (set === 'n') return MODES_N;
+      if (set === 'u') return MODES_U;
+      return MODES_G;
     }
 
-    const TASK_SET_LABELS = { r: 'ПРАВИЛЬНОЕ Р', l: 'ЗАМЕНА Р→Л', v: 'ЗАМЕНА Р→В', y: 'ЗАМЕНА Р→Й' };
+    const TASK_SET_LABELS = { r: 'ПРАВИЛЬНОЕ Р', l: 'ЗАМЕНА Р→Л', v: 'ЗАМЕНА Р→В', y: 'ЗАМЕНА Р→Й', n: 'ЗАМЕНА Р→Н', g: 'ЗАМЕНА Р→Г', u: 'УНИВЕРСАЛЬНОЕ ЗАДАНИЕ' };
 
     // [TAG:JS-FILENAME] ─────────────────────────────────────────────────────
     // Builds the "<Имя_Фамилия_Возраст>_<ЗАДАНИЕ>_<timestamp>" prefix shared
@@ -2393,14 +2776,40 @@
     }
     // [END:JS-FILENAME]
 
+    let rightPanelView = 'tasks'; // 'tasks' | 'settings' — only relevant when currentTaskSet === 'r'
+
+    function updateRightPanelView() {
+      const isR = currentTaskSet === 'r';
+      $('right-panel-view-toggle').style.display = isR ? '' : 'none';
+      $('btn-view-tasks').classList.toggle('active', rightPanelView === 'tasks');
+      $('btn-view-settings').classList.toggle('active', rightPanelView === 'settings');
+      // Non-R sets always show the card list (no settings to toggle to).
+      // R set shows whichever view is currently selected (defaults to tasks).
+      const showTasks = !isR || rightPanelView === 'tasks';
+      $('card-nav-l').classList.toggle('visible', showTasks);
+      // Settings sections (presets/sliders/normalization) are r-only AND only
+      // shown when the settings view is explicitly selected while in R mode.
+      const showSettings = isR && rightPanelView === 'settings';
+      document.querySelectorAll('.settings-section.r-only').forEach(el => {
+        el.classList.toggle('hidden', !showSettings);
+      });
+    }
+
+    $('btn-view-tasks').onclick = () => { rightPanelView = 'tasks'; updateRightPanelView(); };
+    $('btn-view-settings').onclick = () => { rightPanelView = 'settings'; updateRightPanelView(); };
+
     function switchTaskSet(set) {
       if (isListening) stopListening();
       saveSessionState(currentTaskSet);
       currentTaskSet = set;
       MODES = setModesFor(set);
-      cardIndex = (set === 'r')
-        ? firstUnfinishedIndex(MODES_R, completedCards.r)
-        : firstUnfinishedIndex(MODES, completedCards[set]);
+      if (set === 'r') {
+        cardIndex = firstUnfinishedIndex(MODES_R, completedCards.r);
+      } else if (set === 'u') {
+        cardIndex = getUniversalCardIndex();
+      } else {
+        cardIndex = firstUnfinishedIndex(MODES, completedCards[set]);
+      }
       lLevelIdx = 0;
       lZoneStart = null;
       loadSessionState(set); // restores this set's own log + audio buffer (does NOT clear it)
@@ -2415,18 +2824,22 @@
       $('btn-set-l').classList.toggle('active', set === 'l');
       $('btn-set-v').classList.toggle('active', set === 'v');
       $('btn-set-y').classList.toggle('active', set === 'y');
-      document.querySelectorAll('.settings-section.r-only').forEach(el => {
-        el.classList.toggle('hidden', set !== 'r');
-      });
+      $('btn-set-n').classList.toggle('active', set === 'n');
+      $('btn-set-g').classList.toggle('active', set === 'g');
+      $('btn-set-u').classList.toggle('active', set === 'u');
       $('mic-level-wrap').style.display = set !== 'r' ? 'none' : '';
-      $('card-nav-l').classList.toggle('visible', set !== 'r');
-      if (set !== 'r') buildCardNav();
+      rightPanelView = 'tasks'; // task list takes priority every time you switch sets, including back to R
+      updateRightPanelView();
+      buildCardNav();
     }
 
     $('btn-set-r').onclick = () => switchTaskSet('r');
     $('btn-set-l').onclick = () => switchTaskSet('l');
     $('btn-set-v').onclick = () => switchTaskSet('v');
     $('btn-set-y').onclick = () => switchTaskSet('y');
+    $('btn-set-n').onclick = () => switchTaskSet('n');
+    $('btn-set-g').onclick = () => switchTaskSet('g');
+    $('btn-set-u').onclick = () => switchTaskSet('u');
 
     // Mode buttons removed in v4.0 — task cards replace them.
     // MODES array is kept as card data source; modeGridEl is no longer in DOM.
@@ -2480,7 +2893,8 @@
       $('card-emoji').textContent  = m.emoji;
       $('card-name').textContent   = m.name;
       $('card-hint').textContent   = m.hint;
-      $('task-card').className = 'task-card mode-l' + (isRecording ? ' recording' : '');
+      const isDoneL = completedCards[currentTaskSet].has(m.id);
+      $('task-card').className = 'task-card mode-l' + (isRecording ? ' recording' : '') + (isDoneL ? ' completed' : '');
 
       const badges = $('level-badges');
       const meterTrack = $('level-meter-track');
@@ -2533,6 +2947,18 @@
       document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
       logLines.push({ ts: '──', text: 'CARD ' + (cardIndex + 1) + '/' + MODES.length + ': ' + mc.name.toUpperCase(), detected: false });
       sessionLogStart = logLines.length;
+
+      // Crescendo exception only: gating is volume-only (handled below by
+      // updateLevelMonitor), but we still run Р-classification in the
+      // background, fixed to the single best-performing preset (no cycling
+      // through all 4 — that's only needed for the A/B-testing R-cards).
+      // This is informational/log-only: renderResult() writes its own
+      // detected/not-detected rows per inference tick alongside the
+      // level-status rows from updateLevelMonitor(), so afterwards you can
+      // cross-reference timestamps and see exactly which loudness levels
+      // the trained model failed to recognise "Р" at — useful for spotting
+      // retraining gaps. It never blocks or delays advancing a level.
+      if (currentTaskSet === 'r') applyPreset(PRESETS[0]);
 
       renderCardL(true);
     }
@@ -2650,7 +3076,7 @@
       else if (lLevelIdx === 0)    logSuffix = ' — тишина';
        else                         logSuffix = ' — тише нужного';
        const rowText = mc.sound.toUpperCase() + ' [' + lvl.label + '] ' + micPercent.toFixed(0) + '%' + logSuffix;
-       logLines.push({ ts, text: rowText, detected: status === 'ok' });
+       logLines.push({ ts, text: rowText, detected: status === 'ok', kind: 'level' });
 
        const row = document.createElement('div');
        row.className = 'log-row ' + (status === 'ok' ? 'detected' : 'noise');
@@ -2679,6 +3105,7 @@
         stopListening();
         onSessionComplete();
       } else {
+        playLevelPassSound(); // small reward blip — distinct from the full-card fanfare
         renderCardL(true); // refresh badges (mark previous level done) + reset meter
       }
     }
@@ -2699,8 +3126,22 @@
     let presetCycleTimer = null;
     let sessionLogStart  = 0; // logLines index at session start — for per-session detection count
 
+    // [TAG:JS-CARD-MECHANIC] Decides which recording mechanic the CURRENTLY
+    // ACTIVE card uses: the classifier preset-cycle (R-set cards, detecting
+    // the trained "Р" sound) or the live mic-loudness Тихо/Средне/Громко
+    // mechanic (all L/V/Y/N/G cards, PLUS the single R-set exception below).
+    // Exception: MODES_R's 'crescendo' card ("Нарастание") asks for the same
+    // quiet→medium→loud progression as the substitution task-sets, so it
+    // opts into the level mechanic via useLevelMechanic:true on its MODES_R
+    // entry — everything else in 'r' keeps the classifier-based mechanic.
+    function isLevelModeCard() {
+      if (currentTaskSet !== 'r') return true;
+      const m = MODES[cardIndex];
+      return !!(m && m.useLevelMechanic);
+    }
+
     function renderCard(isRecording) {
-      if (currentTaskSet !== 'r') { renderCardL(isRecording); return; }
+      if (isLevelModeCard()) { renderCardL(isRecording); return; }
       const m = MODES[cardIndex];
       $('card-number').textContent    = 'Задание ' + (cardIndex + 1) + ' из ' + MODES.length;
       $('card-emoji').textContent     = m.emoji;
@@ -2711,7 +3152,8 @@
       $('card-footer').textContent    = isRecording
         ? '⏺ Идёт запись — повторяйте задание…'
         : '✅ Если готовы — нажмите «Начать»';
-      $('task-card').className = 'task-card' + (isRecording ? ' recording' : '');
+      const isDoneR = completedCards[currentTaskSet].has(m.id);
+      $('task-card').className = 'task-card' + (isRecording ? ' recording' : '') + (isDoneR ? ' completed' : '');
       const badges = $('level-badges');
       const track  = $('level-meter-track');
       const warn   = $('level-warning');
@@ -2787,19 +3229,39 @@
     }
 
     function onSessionComplete() {
-      // Subtle summary line: detections / total inferences for this session
-      const sessionLines = logLines.slice(sessionLogStart);
-      const total     = sessionLines.filter(l => l.ts !== '──').length;
+      // Subtle summary line: detections / total inferences for this session.
+      // NOTE: filtered by `kind` here, not just `ts !== '──'` — the crescendo
+      // R-card exception writes BOTH level-status rows (kind:'level', volume
+      // gating — what actually advances the card) AND classifier rows
+      // (kind:'classify', Р-recognition — log-only, see startLevelCycle()).
+      // Mixing them would conflate two different meanings of "detected" and
+      // produce a meaningless count, so we only summarize the stream that
+      // actually gates this card's progress; the other stream stays in the
+      // full exported log untouched, for later retraining analysis.
+      const wantKind  = isLevelModeCard() ? 'level' : 'classify';
+      const sessionLines = logLines.slice(sessionLogStart).filter(l => l.kind === wantKind);
+      const total     = sessionLines.length;
       const detected  = sessionLines.filter(l => l.detected).length;
       const summary = document.createElement('div');
       summary.style.cssText = 'padding:3px 10px 5px;font-size:0.63rem;font-family:monospace;color:#4a4f62;';
-       summary.textContent = 'итог сессии: ' + detected + ' / ' + total + (currentTaskSet !== 'r' ? ' уровней пройдено' : ' обнаружений');
+       summary.textContent = 'итог сессии: ' + detected + ' / ' + total + (isLevelModeCard() ? ' уровней пройдено' : ' обнаружений');
       document.getElementById('log-list').appendChild(summary);
       document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
       logLines.push({ ts: '──', text: 'SESSION TOTAL: ' + detected + '/' + total, detected: false });
-      // Mark this card as completed in the nav
-      completedCards[currentTaskSet].add(cardIndex);
-      if (currentTaskSet !== 'r') renderCardNav();
+      // Mark this card as completed in the nav — by stable id, not array index
+      // (so adding/reordering cards later doesn't mis-attribute progress).
+      completedCards[currentTaskSet].add(MODES[cardIndex].id);
+      lastCardCompletedAt = Date.now(); // real wall-clock time of this completion — used for download filenames
+      if (currentTaskSet === 'u') {
+        // Grow the universal list right away so the fresh «Попытка N+1»
+        // card shows up in the right-side nav immediately upon finishing,
+        // not only after the user clicks "Следующее задание".
+        ensureUniversalCount(MODES_U.length + 1);
+        buildCardNav(); // rebuilds the DOM list (renderCardNav alone only
+                         // restyles existing buttons, it can't add new ones)
+      } else {
+        renderCardNav();
+      }
       persistUserProgress();
       updateTaskSetBtnCompletion();
       // Card turns fully green
@@ -2836,10 +3298,17 @@
         presetCycleIdx = 0;
         lLevelIdx = 0;
         lZoneStart = null;
-        cardIndex = (cardIndex + 1) % MODES.length;
+        if (currentTaskSet === 'u') {
+          // The next attempt was already created in onSessionComplete() so
+          // it's visible in the right-side nav right away — here we just
+          // jump to it.
+          cardIndex = MODES_U.length - 1;
+        } else {
+          cardIndex = (cardIndex + 1) % MODES.length;
+        }
         card.classList.remove('completed');
         renderCard(false);
-      if (currentTaskSet !== 'r') renderCardNav();
+      renderCardNav();
 
         // Log marker for the new card
         const m = MODES[cardIndex];
@@ -2930,6 +3399,77 @@
     }
     // [END:JS-CELEBRATION-SOUND]
 
+    // [TAG:JS-UI-SOUNDS] Quiet click feedback + per-level "pass" blip.
+    // Uses one lazily-created shared AudioContext (created on first user
+    // gesture, per browser autoplay rules) instead of a new AudioContext per
+    // call — avoids the "too many AudioContexts" warning some browsers log
+    // when clicks happen in quick succession.
+    let uiAudioCtx = null;
+    function getUiAudioCtx() {
+      try {
+        if (!uiAudioCtx || uiAudioCtx.state === 'closed') {
+          uiAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (uiAudioCtx.state === 'suspended') uiAudioCtx.resume();
+        return uiAudioCtx;
+      } catch(e) { return null; }
+    }
+
+    // Quiet, neutral tick for any clickable control — deliberately subtle so
+    // it reads as a soft physical tap (muffled, low-pitched), not a beep.
+    function playClickSound() {
+      const ac = getUiAudioCtx();
+      if (!ac) return;
+      try {
+        const osc    = ac.createOscillator();
+        const filter = ac.createBiquadFilter();
+        const gain   = ac.createGain();
+        osc.connect(filter); filter.connect(gain); gain.connect(ac.destination);
+        osc.type = 'triangle'; osc.frequency.value = 220;
+        filter.type = 'lowpass'; filter.frequency.value = 700;
+        const st = ac.currentTime;
+        gain.gain.setValueAtTime(0, st);
+        gain.gain.linearRampToValueAtTime(0.025, st + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.001, st + 0.04);
+        osc.start(st); osc.stop(st + 0.05);
+      } catch(e) { /* ignore */ }
+    }
+
+    // Short, cheerful two-note blip for passing one loudness level
+    // (Тихо/Средне/Громко) — lighter than the full-card fanfare, which still
+    // plays separately via playCelebrationSound() when the whole card is done.
+    function playLevelPassSound() {
+      const ac = getUiAudioCtx();
+      if (!ac) return;
+      try {
+        [[880,0],[1175,0.09]].forEach(([freq, t]) => {
+          const osc  = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          osc.type = 'sine'; osc.frequency.value = freq;
+          const st = ac.currentTime + t;
+          gain.gain.setValueAtTime(0, st);
+          gain.gain.linearRampToValueAtTime(0.18, st + 0.02);
+          gain.gain.linearRampToValueAtTime(0, st + 0.16);
+          osc.start(st); osc.stop(st + 0.18);
+        });
+      } catch(e) { /* ignore */ }
+    }
+
+    // Delegated click-sound listener — covers every current and future
+    // button/clickable card without wiring each one individually. Skips
+    // typing/selection controls (input, select, textarea) so it never fires
+    // while filling out the new-profile form.
+    document.addEventListener('click', (e) => {
+      const el = e.target.closest(
+        'button, .user-card, .user-row, .user-card-new, .user-row-new, ' +
+        '.card-nav-btn, .preset-btn, .task-set-btn, .view-toggle-btn'
+      );
+      if (el) playClickSound();
+    }, true);
+    // [END:JS-UI-SOUNDS]
+
+
     function stopPresetCycle() {
       if (presetCycleTimer) {
         clearTimeout(presetCycleTimer);
@@ -2951,7 +3491,7 @@
 
     function addLog(ts, r, noise, unknown, detected, peak) {
       const text = `r=${(r*100).toFixed(0)}% n=${(noise*100).toFixed(0)}% u=${(unknown*100).toFixed(0)}% pk=${peak}`;
-      logLines.push({ ts, text, detected });
+      logLines.push({ ts, text, detected, kind: 'classify' });
       const row = document.createElement('div');
       row.className = 'log-row ' + (detected ? 'detected' : 'noise');
       row.innerHTML = `<span class="log-ts">${ts}</span><span>${text}${detected ? ' ✓' : ''}</span>`;
@@ -2964,6 +3504,7 @@
       logList.innerHTML = '';
       // Also wipe the parallel audio recording so WAV and log stay in sync
       wavChunks = []; wavTotalSmp = 0; recStartTime = 0; recStopTime = 0; sessionStartTime = 0;
+      lastCardCompletedAt = 0;
       sessionStore[currentTaskSet] = emptySessionState(); // clear persisted copy too — only THIS set's buffer
       const dlBtn = $('btn-download-audio');
       dlBtn.disabled = true;
@@ -3047,7 +3588,7 @@
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href = url;
-      a.download = getFilenamePrefix() + '_log_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+      a.download = getFilenamePrefix() + '_log_' + new Date(lastCardCompletedAt || Date.now()).toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -3113,16 +3654,22 @@
     }
 
     async function initApp() {
+      // Build the interface regardless of whether the model loads — task list,
+      // card nav, and the Задания/Настройки toggle must be visible even if
+      // edge-impulse-standalone.js/.wasm are missing or fail to load (model
+      // load only gates the actual "Начать" inference, guarded separately in
+      // startListening()).
+      cardIndex = (currentTaskSet === 'r') ? firstUnfinishedIndex(MODES_R, completedCards.r) : firstUnfinishedIndex(MODES, completedCards[currentTaskSet]);
+      renderCard(false);
+      buildCardNav();
+      updateRightPanelView();
+      updateTaskSetBtnCompletion();
+
       try {
         await loadModel();
       } catch (e) {
         return; // error already shown in statusEl by loadModel()
       }
-
-       cardIndex = (currentTaskSet === 'r') ? firstUnfinishedIndex(MODES_R, completedCards.r) : firstUnfinishedIndex(MODES, completedCards[currentTaskSet]);
-       renderCard(false);
-       renderCardNav();
-       updateTaskSetBtnCompletion();
     }
 
     // [END:JS-MODEL-INIT]
@@ -3131,7 +3678,7 @@
     // buildBars(): creates DOM rows once on first result.
     // renderResult(): updates bar widths and detection indicator each frame.
     let barFills = {}, barVals = {}, barsBuilt = false;
-    let labelCache = null; // FIX #37: cached label-to-object mapping from buildBars()
+    let labelCache = null; // FIX #37 (corrected): cached label STRINGS, not result objects — see buildBars()
 
     function buildBars(results) {
       if (barsBuilt) return;
@@ -3160,13 +3707,23 @@
         barFills[r.label] = fill;
         barVals[r.label]  = valSpan;
       });
-      // FIX #37: cache label-to-object mapping so renderResult() can look up without .find()
+      // FIX #37 (corrected): cache the LABEL STRINGS only, not the result
+      // objects themselves. classify() returns brand-new {label, value}
+      // objects on every call (see _fillResult()), so caching the object
+      // reference here meant rClass/noiseClass/unknownClass in renderResult()
+      // pointed at the very first inference's snapshot forever — the
+      // detected/% values were silently frozen for the rest of the app
+      // session (visible bars still updated fine since those read straight
+      // from the current frame's res.results, masking the bug). Caching
+      // just the label string and re-looking-up the live object each frame
+      // keeps the "skip repeated label-matching" perf win without the
+      // staleness.
       labelCache = { r: null, noise: null, unknown: null };
       results.forEach(r => {
         const low = r.label.toLowerCase();
-        if (low === 'р' || low === 'r') labelCache.r = r;
-        else if (low === 'noise' || low === 'шум') labelCache.noise = r;
-        else if (low === 'unknown' || low === 'неизвестно') labelCache.unknown = r;
+        if (low === 'р' || low === 'r') labelCache.r = r.label;
+        else if (low === 'noise' || low === 'шум') labelCache.noise = r.label;
+        else if (low === 'unknown' || low === 'неизвестно') labelCache.unknown = r.label;
       });
     }
 
@@ -3174,10 +3731,13 @@
     function renderResult(res, peak) {
       buildBars(res.results);
       const s = getSettings();
-      // FIX #37: use cached lookup instead of .find() — byte-for-byte identical output
-      const rClass       = labelCache.r;
-      const noiseClass   = labelCache.noise;
-      const unknownClass = labelCache.unknown;
+      // Look up THIS frame's live result objects by the cached label string
+      // (cheap — typically 3 labels) instead of caching the objects directly.
+      const byLabel = {};
+      res.results.forEach(r => { byLabel[r.label] = r; });
+      const rClass       = labelCache.r       ? byLabel[labelCache.r]       : null;
+      const noiseClass   = labelCache.noise   ? byLabel[labelCache.noise]   : null;
+      const unknownClass = labelCache.unknown ? byLabel[labelCache.unknown] : null;
 
       res.results.forEach(r => {
         if (barFills[r.label]) barFills[r.label].style.width = (r.value * 100) + '%';
@@ -3257,6 +3817,7 @@
     let wavTotalSmp    = 0;    // total sample count
     let recStartTime   = 0;    // Date.now() of very first Start (persists across stop/resume)
     let recStopTime    = 0;    // Date.now() of last Stop (0 = not stopped)
+    let lastCardCompletedAt = 0; // Date.now() ms when the most recent card was completed (0 = none yet) [TAG:JS-SESSION-STORE]
 
     function recStart() {
       if (recStartTime === 0) {
@@ -3319,7 +3880,7 @@
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href = url;
-      a.download = getFilenamePrefix() + '_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.wav';
+      a.download = getFilenamePrefix() + '_' + new Date(lastCardCompletedAt || Date.now()).toISOString().slice(0,19).replace(/:/g,'-') + '.wav';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -3344,6 +3905,11 @@
       // (compares against undefined), so classify() is never even called, no error
       // is ever thrown, and the session ends with SESSION TOTAL: 0/0 with nothing
       // in the log or console. This is the root cause of the 0/0 bug.
+      // NOTE: gated on currentTaskSet === 'r' (not isLevelModeCard()) — the
+      // crescendo exception card is level-mode for GATING purposes but still
+      // runs the classifier in parallel (single fixed preset, log-only, see
+      // [TAG:JS-LEVEL-CYCLE] startLevelCycle()), so it still needs the model
+      // loaded before recording starts.
       if (currentTaskSet === 'r' && (!classifierInitialized || !window.NUM_SAMPLES)) {
         statusEl.textContent = 'Модель ещё загружается, подождите...';
         statusEl.className = 'error';
@@ -3385,7 +3951,7 @@
         for (let s of raw) rms += s * s;
         const micPercent = Math.min(Math.sqrt(rms / raw.length) * 500, 100);
         micLevel.style.width = micPercent + '%';
-        if (currentTaskSet !== 'r' && isListening) updateLevelMonitor(micPercent);
+        if (isLevelModeCard() && isListening) updateLevelMonitor(micPercent);
 
         const samples = nativeRate === window.MODEL_RATE ? raw : resample(raw, nativeRate, window.MODEL_RATE);
         // [TAG:JS-RINGBUFFER] ────────────────────────────────────────────────
@@ -3445,6 +4011,10 @@
         if (currentTaskSet !== 'r') {
          // Level-based task-set: no model inference needed, only mic RMS — see [TAG:JS-LEVEL-CYCLE]
        } else {
+        // Intentionally currentTaskSet-gated, not isLevelModeCard()-gated: the
+        // crescendo exception (level-mode UI/gating) still wants classifier
+        // inference running in the background for log-only Р-recognition —
+        // see startLevelCycle()'s applyPreset(PRESETS[0]) above.
         scheduleInference();
        }
 
@@ -3452,8 +4022,8 @@
       btnStop.style.display  = 'inline-block';
       statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${window.MODEL_RATE} Гц, окно ${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} мс)`;
        statusEl.className     = '';
-        if (currentTaskSet === 'r') renderCard(true);   // R mode only — level-based sets are rendered by startLevelCycle()
-        if (currentTaskSet !== 'r') {
+        if (!isLevelModeCard()) renderCard(true);   // classifier-cycle cards only — level-mode cards (incl. crescendo exception) are rendered by startLevelCycle()→renderCardL()
+        if (isLevelModeCard()) {
          startLevelCycle();
        } else {
          startPresetCycle(); // begin auto-cycling presets every PRESET_SLOT_SEC seconds
@@ -3462,7 +4032,7 @@
 
     function stopListening() {
       isListening = false;
-      if (currentTaskSet !== 'r') {
+      if (isLevelModeCard()) {
         stopLevelCycle();
       } else {
         stopPresetCycle();                         // clear preset cycle timer and countdown
