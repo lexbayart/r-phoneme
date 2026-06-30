@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.2.2 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.3.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,7 +91,12 @@
    CHANGELOG
 ================================================================================
 
-      v6.2.2 (2026-06-30)
+       v6.3.0 (2026-06-30)
+         - FIXED: inference loop died after first tick — NUM_SAMPLES undeclared in scheduleInference() [TAG:JS-INFERENCE]
+         - FIXED: compact log mode showed nothing — isMilestone checked wrong field (text vs ts) [TAG:JS-LOG]
+         - FIXED: log data truncated at 500 entries — removed cap on logLines array, DOM render capped at 5000 [TAG:JS-LOG]
+
+       v6.2.2 (2026-06-30)
         - FIXED: deduplicated log heading, fixed toggle wiring [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
 
       v6.2.1 (2026-06-30)
@@ -1640,7 +1645,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-      const APP_VERSION = 'v6.2.2';
+      const APP_VERSION = 'v6.3.0';
     // [END:JS-VERSION]
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
@@ -1767,6 +1772,9 @@
 
     function selectUser(user) {
       activeUser = user;
+
+      logLines.length = 0;
+      logList.innerHTML = '';
 
       completedCards.r = new Set(user.completedCards?.r || []);
       completedCards.l = new Set(user.completedCards?.l || []);
@@ -2373,10 +2381,9 @@
       else if (lLevelIdx === 0)    logSuffix = ' — тишина';
        else                         logSuffix = ' — тише нужного';
       const rowText = mc.sound.toUpperCase() + ' [' + lvl.label + '] ' + micPercent.toFixed(0) + '%' + logSuffix;
-      logLines.push({ ts, text: rowText, detected: status === 'ok' });
-      if (logLines.length > MAX_LOG) logLines.shift();
+       logLines.push({ ts, text: rowText, detected: status === 'ok' });
 
-      // ── sustained in-zone hold → level passed ───────────────────────────
+       // ── sustained in-zone hold → level passed ───────────────────────────
       if (status === 'ok') {
         if (!lZoneStart) lZoneStart = Date.now();
         if (Date.now() - lZoneStart >= ZONE_HOLD_MS) {
@@ -2655,9 +2662,8 @@
 
     // [TAG:JS-LOG] ───────────────────────────────────────────────────────────
     // addLog(ts, r, noise, unknown, detected, peak): appends one row to #log-list.
-    // Max 500 rows kept in DOM and logLines[]. Copy exports logLines + settings.
+    // logLines[] grows without limit for full-session export. DOM render capped at 5000.
     const logLines = []; // { ts, text, detected }
-    const MAX_LOG = 500;
 
     // [TAG:JS-LOG-TOGGLE] Verbose/compact toggle for log panel
     let logVerbose = localStorage.getItem('rph_log_verbose') === '1';
@@ -2676,7 +2682,7 @@
       const logList = document.getElementById('log-list');
       logList.innerHTML = '';
       for (const entry of logLines) {
-        const isMilestone = entry.text.includes('══') || entry.text.includes('──') || entry.text.includes('итог') || entry.text.includes('ПРЕСЕТ') || entry.text.includes('ЗАДАНИЕ') || entry.text.includes('НАБОР');
+        const isMilestone = entry.ts === '──';
         if (!logVerbose && !isMilestone) continue;
         const row = document.createElement('div');
         row.className = 'log-row ' + (entry.detected ? 'detected' : 'noise');
@@ -2690,11 +2696,10 @@
 
     function addLog(ts, r, noise, unknown, detected, peak) {
       const text = `r=${(r*100).toFixed(0)}% n=${(noise*100).toFixed(0)}% u=${(unknown*100).toFixed(0)}% pk=${peak}`;
-      logLines.push({ ts, text, detected });
-      if (logLines.length > MAX_LOG) logLines.shift();
+       logLines.push({ ts, text, detected });
 
-      const isMilestone = text.includes('══') || text.includes('──') || text.includes('итог') || text.includes('ПРЕСЕТ') || text.includes('ЗАДАНИЕ') || text.includes('НАБОР');
-      const isDetail = ts.match(/^\d+\.\d/);
+       const isMilestone = ts === '──';
+       const isDetail = ts.match(/^\d+\.\d/);
       if (!logVerbose && !isMilestone && isDetail) return;
 
       const row = document.createElement('div');
@@ -2702,7 +2707,7 @@
       row.innerHTML = `<span class="log-ts">${ts}</span><span>${text}${detected ? ' ✓' : ''}</span>`;
       logList.appendChild(row);
       // Убираем старые DOM-строки
-      while (logList.children.length > MAX_LOG) logList.removeChild(logList.firstChild);
+       while (logList.children.length > 5000) logList.removeChild(logList.firstChild);
       requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
     }
 
@@ -3098,7 +3103,7 @@
             const cfg = getSettings();
             const win = new Float32Array(window.NUM_SAMPLES);
             for (let i = 0; i < window.NUM_SAMPLES; i++) {
-              win[i] = ringBuf[(ringPos + i) % NUM_SAMPLES] * cfg.scale;
+               win[i] = ringBuf[(ringPos + i) % window.NUM_SAMPLES] * cfg.scale;
             }
 
             // Нормализация (если включена)
