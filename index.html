@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-30  v6.1.2 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.2 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -90,6 +90,9 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+    v6.2 (2026-06-30)
+      - ADDED: log panel verbose/compact toggle — detailed inference logs hidden by default [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
 
     v6.1.2 (2026-06-30)
       - FIXED: cardIndex reset to 0 after firstUnfinished computation — v6.1.2 [TAG:JS-LANDING] [TAG:JS-MODE]
@@ -501,6 +504,7 @@
   [TAG:JS-PRESETS]           PRESETS array definition + applyPreset()
   [TAG:JS-MODE]              MODES array for task cards; preset buttons rendering
   [TAG:JS-LOG]               addLog(), copy log, download log (.txt), clear log + audio reset
+  [TAG:JS-LOG-TOGGLE]        Verbose/compact toggle for log panel, reRenderLog()
   [TAG:JS-LOG-EMPTY-GUARD]   Guard: block download when log empty; red button, error sound, auto-remove message
   [TAG:JS-VERSION]           APP_VERSION constant — single source of truth for version number
   [TAG:JS-MODEL-INIT]        Model init, getProperties(), debug line
@@ -832,6 +836,10 @@
       color: var(--noise-color) !important;
       border-color: var(--noise-color) !important;
       background: rgba(255,79,110,0.09);
+    }
+    #log-toggle.active {
+      color: var(--r-color);
+      border-color: rgba(79,255,176,0.4);
     }
     #log-list {
       flex: 1; overflow-y: auto; font-family: monospace; font-size: 0.68rem;
@@ -1371,13 +1379,16 @@
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
       </div>
       <div class="left-panel-label">История выполнения</div>
+      <!-- [TAG:HTML-LOG-TOGGLE] Verbose/compact toggle button -->
       <div class="panel-title">
         <div style="display:flex;gap:6px;flex-wrap:nowrap">
           <button id="btn-clear-log">Очистить</button>
           <button id="btn-copy-log">Копировать</button>
           <button id="btn-download-log">Скачать</button>
+          <button id="log-toggle" class="panel-title-btn">≡ Подробно</button>
         </div>
       </div>
+      <!-- [END:HTML-LOG-TOGGLE] -->
       <!-- [END:HTML-LEFT-PANEL-LABELS] -->
       <div id="log-list"></div>
     </div>
@@ -1606,7 +1617,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v6.1.2';
+    const APP_VERSION = 'v6.2';
     // [END:JS-VERSION]
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
@@ -2625,10 +2636,43 @@
     const logLines = []; // { ts, text, detected }
     const MAX_LOG = 500;
 
+    // [TAG:JS-LOG-TOGGLE] Verbose/compact toggle for log panel
+    let logVerbose = localStorage.getItem('rph_log_verbose') === '1';
+
+    function toggleLogVerbose() {
+      logVerbose = !logVerbose;
+      localStorage.setItem('rph_log_verbose', logVerbose ? '1' : '0');
+      const btn = document.getElementById('log-toggle');
+      btn.textContent = logVerbose ? '≡ Кратко' : '≡ Подробно';
+      if (logVerbose) btn.classList.add('active');
+      else btn.classList.remove('active');
+      reRenderLog();
+    }
+
+    function reRenderLog() {
+      const logList = document.getElementById('log-list');
+      logList.innerHTML = '';
+      for (const entry of logLines) {
+        const isMilestone = entry.text.includes('══') || entry.text.includes('──') || entry.text.includes('итог');
+        if (!logVerbose && !isMilestone) continue;
+        const row = document.createElement('div');
+        row.className = 'log-row ' + (entry.detected ? 'detected' : 'noise');
+        row.innerHTML = `<span class="log-ts">${entry.ts}</span><span>${entry.text}${entry.detected ? ' ✓' : ''}</span>`;
+        logList.appendChild(row);
+      }
+      logList.scrollTop = logList.scrollHeight;
+    }
+
+    // [END:JS-LOG-TOGGLE]
+
     function addLog(ts, r, noise, unknown, detected, peak) {
       const text = `r=${(r*100).toFixed(0)}% n=${(noise*100).toFixed(0)}% u=${(unknown*100).toFixed(0)}% pk=${peak}`;
       logLines.push({ ts, text, detected });
       if (logLines.length > MAX_LOG) logLines.shift();
+
+      const isMilestone = text.includes('══') || text.includes('──') || text.includes('итог');
+      const isDetail = ts.match(/^\d+\.\d/);
+      if (!logVerbose && !isMilestone && isDetail) return;
 
       const row = document.createElement('div');
       row.className = 'log-row ' + (detected ? 'detected' : 'noise');
@@ -2660,6 +2704,11 @@
         setTimeout(() => btn.textContent = 'Копировать', 1500);
       });
     };
+
+    // Log verbose/compact toggle initialization
+    const logToggleBtn = $('log-toggle');
+    logToggleBtn.textContent = logVerbose ? '≡ Кратко' : '≡ Подробно';
+    if (logVerbose) logToggleBtn.classList.add('active');
 
     // [TAG:JS-LOG-EMPTY-GUARD] Guard: block download when log is empty
     const emptyGuardMsgId = '__empty_guard_msg__';
