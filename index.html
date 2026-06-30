@@ -11,7 +11,8 @@
   IF YOUR CURRENT TASK WOULD MODIFY, REFACTOR, "CLEAN UP", THROTTLE, BATCH,
   DEDUPE, SAMPLE, TRUNCATE, RATE-LIMIT, OR OTHERWISE CHANGE THE BEHAVIOR OF
   THE LOGGING CODE MARKED "GUARDED-NO-OPTIMIZE" BELOW (search for that exact
-  string — it appears at [TAG:JS-LOG] and [TAG:JS-INFERENCE]) — EVEN IF THE
+  string — it appears at [TAG:JS-LOG], [TAG:JS-INFERENCE], and in the
+  updateLevelMonitor() L-mode continuous log row) — EVEN IF THE
   USER'S INSTRUCTION DID NOT MENTION LOGGING, EVEN IF YOU BELIEVE IT WAS AN
   ACCIDENTAL SIDE EFFECT, EVEN IF YOU THINK IT WOULD "IMPROVE PERFORMANCE":
 
@@ -19,10 +20,10 @@
     VERBATIM, BEFORE TOUCHING ANYTHING ELSE IN THIS FILE:
 
       "STOPPED: my current task would touch the GUARDED-NO-OPTIMIZE region
-       in index.html ([TAG:JS-LOG] / [TAG:JS-INFERENCE] — the per-inference
-       logging code). This region is explicitly protected. I need you to
-       confirm, in your own words, that you specifically want logging
-       behavior changed before I proceed."
+       in index.html ([TAG:JS-LOG] / [TAG:JS-INFERENCE] / updateLevelMonitor()
+       — the per-inference and L-mode continuous logging code). This region is
+       explicitly protected. I need you to confirm, in your own words, that
+       you specifically want logging behavior changed before I proceed."
 
   Do not silently skip the edit either — say the above out loud, then wait.
   Do not paraphrase it into something softer. Do not proceed on your own
@@ -823,6 +824,7 @@
 -->
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Детектор звука «Р»</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
@@ -1736,6 +1738,10 @@
       DEMO_USERS.forEach(saveUser);
     }
 
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+
     function formatLastSession(isoDate) {
       if (!isoDate) return 'Сессий не было';
       const d = new Date(isoDate);
@@ -1765,7 +1771,7 @@
         card.className = 'user-card';
         card.innerHTML = `
           <div class="user-card-header">
-            <div class="user-card-name">${user.name}${user.surname ? ' ' + user.surname : ''}</div>
+            <div class="user-card-name">${escapeHtml(user.name)}${user.surname ? ' ' + escapeHtml(user.surname) : ''}</div>
             <div style="display:flex;gap:6px;align-items:center;">
               <button class="user-card-edit-btn" data-id="${user.id}" title="Редактировать">✏️</button>
               <div class="user-card-age">${user.age ? user.age + ' лет' : '—'}</div>
@@ -2391,6 +2397,12 @@
         }
       }
 
+      // GUARDED-NO-OPTIMIZE — if your task touches this block (the L-mode
+      // continuous log row below), STOP and read the warning block at the
+      // very top of this file (before <head>) first. This is the same
+      // product-critical detailed per-frame logging as [TAG:JS-LOG] and
+      // [TAG:JS-INFERENCE] — every frame must produce one log line. Do not
+      // edit without reporting back to the user per the warning block.
       // ── continuous log row: elapsed session time (matches WAV audio position) ─
       // [TAG:JS-L-LOG-TIMESTAMP] same format as R task-set: SSSS.ff (v5.1)
       const mc = MODES[cardIndex];
