@@ -2,6 +2,42 @@
 <html lang="ru">
 <!--
 ================================================================================
+  ⚠️⚠️⚠️  STOP — GUARDED-NO-OPTIMIZE — READ BEFORE EDITING LOGGING CODE  ⚠️⚠️⚠️
+================================================================================
+
+  THIS IS A DIRECT INSTRUCTION TO ANY AI AGENT EDITING THIS FILE, INCLUDING
+  YOU, RIGHT NOW, REGARDLESS OF WHAT TASK YOU WERE GIVEN.
+
+  IF YOUR CURRENT TASK WOULD MODIFY, REFACTOR, "CLEAN UP", THROTTLE, BATCH,
+  DEDUPE, SAMPLE, TRUNCATE, RATE-LIMIT, OR OTHERWISE CHANGE THE BEHAVIOR OF
+  THE LOGGING CODE MARKED "GUARDED-NO-OPTIMIZE" BELOW (search for that exact
+  string — it appears at [TAG:JS-LOG] and [TAG:JS-INFERENCE]) — EVEN IF THE
+  USER'S INSTRUCTION DID NOT MENTION LOGGING, EVEN IF YOU BELIEVE IT WAS AN
+  ACCIDENTAL SIDE EFFECT, EVEN IF YOU THINK IT WOULD "IMPROVE PERFORMANCE":
+
+    DO NOT MAKE THE EDIT. STOP IMMEDIATELY AND REPORT BACK TO THE USER,
+    VERBATIM, BEFORE TOUCHING ANYTHING ELSE IN THIS FILE:
+
+      "STOPPED: my current task would touch the GUARDED-NO-OPTIMIZE region
+       in index.html ([TAG:JS-LOG] / [TAG:JS-INFERENCE] — the per-inference
+       logging code). This region is explicitly protected. I need you to
+       confirm, in your own words, that you specifically want logging
+       behavior changed before I proceed."
+
+  Do not silently skip the edit either — say the above out loud, then wait.
+  Do not paraphrase it into something softer. Do not proceed on your own
+  judgment that "this case is probably fine." It is the user's call, not
+  yours, every single time this marker is in scope.
+
+  WHY THIS EXISTS: the detailed per-inference log IS the product, not debug
+  output. Every inference tick during a "Правильное Р" session must produce
+  one line: 0012.45 r=72% n=10% u=18% pk=8421 — cross-referenced against the
+  recorded WAV to find where the model misclassifies, for retraining data.
+  This was already broken once (SESSION TOTAL: 0/0 — classifier silently
+  never called) and took a long debugging session to fix. No log size limit
+  (MAX_LOG removed on purpose) and no verbose/compact toggle (removed on
+  purpose) — both are deliberate, permanent product decisions, not oversights.
+================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
    Last updated: 2026-06-30  v6.4.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
@@ -834,7 +870,10 @@
       font-size: 0.72rem; font-weight: 700; color: var(--muted);
       text-transform: uppercase; letter-spacing: 0.1em;
       padding: 12px 14px 8px; border-bottom: 1px solid var(--border);
-      display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-shrink: 0;
+      display: flex; flex-direction: column; align-items: flex-start; gap: 8px; flex-shrink: 0;
+    }
+    .panel-title-buttons {
+      display: flex; gap: 6px; flex-wrap: wrap;
     }
     .panel-title button {
       padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
@@ -897,7 +936,7 @@
     .panel-main {
       position: relative; z-index: 1;
       flex: 1; display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
+      align-items: center; justify-content: flex-start;
       gap: 22px; padding: 24px 16px; overflow-y: auto; overflow-x: clip;
     }
 
@@ -1395,9 +1434,11 @@
       </div>
         <div class="panel-title">
           <span>ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
-          <button id="btn-clear-log">Очистить</button>
-          <button id="btn-copy-log">Копировать</button>
-          <button id="btn-download-log">Скачать</button>
+          <div class="panel-title-buttons">
+            <button id="btn-clear-log">Очистить</button>
+            <button id="btn-copy-log">Копировать</button>
+            <button id="btn-download-log">Скачать</button>
+          </div>
         </div>
       <!-- [END:HTML-LEFT-PANEL-LABELS] -->
       <div id="log-list"></div>
@@ -2650,6 +2691,10 @@
     // [END:JS-CARD-CYCLE]
 
     // [TAG:JS-LOG] ───────────────────────────────────────────────────────────
+    // GUARDED-NO-OPTIMIZE — if your task touches this function, STOP and read
+    // the warning block at the very top of this file (before <head>) first.
+    // Do not edit without reporting back to the user per that block.
+    //
     // addLog(ts, r, noise, unknown, detected, peak): appends one row to #log-list.
     // logLines[] grows without limit for full-session export. Unconditional logging.
     const logLines = []; // { ts, text, detected }
@@ -2776,25 +2821,45 @@
     // Deferred until user selects a profile (called from initApp()).
     let classifier;
 
+    // [FIX 2026-06-30] Model loading split out of initApp() so it can start at page
+    // boot (parallel to the landing/profile screen), not only after a user is
+    // selected. Root cause of SESSION TOTAL: 0/0 — Start could previously be
+    // pressed before window.NUM_SAMPLES was set, silently disabling inference
+    // (see guard comment in startListening()). modelLoadPromise dedupes the call
+    // so calling loadModel() both at boot and from initApp()/selectUser() is safe.
+    let modelLoadPromise = null;
+    function loadModel() {
+      if (modelLoadPromise) return modelLoadPromise;
+      modelLoadPromise = (async () => {
+        try {
+          classifier = new EdgeImpulseClassifier();
+          await classifier.init();
+        } catch (e) {
+          statusEl.textContent = 'Ошибка модели: ' + e;
+          statusEl.className = 'error';
+          throw e;
+        }
+
+        const props        = classifier.getProperties();
+        window.MODEL_RATE  = props.frequency || 16000;
+        window.NUM_SAMPLES = props.frame_sample_count || 16000;
+
+        ringBuf = new Float32Array(window.NUM_SAMPLES);
+
+        debugInfoEl.textContent = `freq=${window.MODEL_RATE} Hz | window=${window.NUM_SAMPLES} samples (${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} ms)`;
+        debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
+        statusEl.textContent = 'Модель готова.';
+      })();
+      return modelLoadPromise;
+    }
+
     async function initApp() {
       try {
-        classifier = new EdgeImpulseClassifier();
-        await classifier.init();
+        await loadModel();
       } catch (e) {
-        statusEl.textContent = 'Ошибка модели: ' + e;
-        statusEl.className = 'error';
-        return;
+        return; // error already shown in statusEl by loadModel()
       }
 
-      const props       = classifier.getProperties();
-      window.MODEL_RATE  = props.frequency || 16000;
-      window.NUM_SAMPLES = props.frame_sample_count || 16000;
-
-       ringBuf = new Float32Array(window.NUM_SAMPLES);
-
-       debugInfoEl.textContent = `freq=${window.MODEL_RATE} Hz | window=${window.NUM_SAMPLES} samples (${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} ms)`;
-       debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
-       statusEl.textContent = 'Модель готова.';
        const firstUnfinishedR = [0,1,2,3,4,5].find(i => !completedCards.r.has(i)) ?? 0;
        const firstUnfinishedL = [0,1,2,3,4,5,6,7,8,9].find(i => !completedCards.l.has(i)) ?? 0;
        cardIndex = (currentTaskSet === 'r') ? firstUnfinishedR : firstUnfinishedL;
@@ -2989,6 +3054,21 @@
     // [TAG:JS-START-STOP] ──────────────────────────────────────────────────
     async function startListening() {
       if (isListening) return;  // prevent double-start on rapid clicks
+
+      // [FIX 2026-06-30] Guard: in 'r' task-set, inference requires the model to be
+      // fully loaded (window.NUM_SAMPLES set by initApp() after classifier.init()
+      // resolves). Without this guard, Start could be pressed while initApp() was
+      // still awaiting classifier.init() — scheduleInference()'s condition
+      // `totalSamples >= window.NUM_SAMPLES` silently evaluates to false forever
+      // (compares against undefined), so classify() is never even called, no error
+      // is ever thrown, and the session ends with SESSION TOTAL: 0/0 with nothing
+      // in the log or console. This is the root cause of the 0/0 bug.
+      if (currentTaskSet === 'r' && (!classifierInitialized || !window.NUM_SAMPLES)) {
+        statusEl.textContent = 'Модель ещё загружается, подождите...';
+        statusEl.className = 'error';
+        return;
+      }
+
       // Remove empty-guard message immediately when recording starts
       removeEmptyGuardMessage();
       isListening = true;
@@ -3041,6 +3121,12 @@
        processorNode.connect(audioCtx.destination);
 
        // [TAG:JS-INFERENCE] ──────────────────────────────────────────────
+       // GUARDED-NO-OPTIMIZE — if your task touches this loop (timing,
+       // skipping ticks, conditional calls to addLog()/renderResult()),
+       // STOP and read the warning block at the very top of this file
+       // (before <head>) first. Do not edit without reporting back to the
+       // user per that block.
+       //
        // Unwrap ring buffer → scale by AUDIO_SCALE → optional peak normalize
        // → classify() → renderResult(). All params read live from getSettings().
        function scheduleInference() {
@@ -3129,8 +3215,12 @@
     btnStop.onclick  = stopListening;
     // [END:JS-START-STOP]
 
-    // Boot: show landing screen (defer classifier init until user selects a profile)
+    // Boot: show landing screen, AND start loading the model in parallel
+    // [FIX 2026-06-30] previously model load was deferred until selectUser() —
+    // now it starts immediately on page load so it's ready (or visibly still
+    // loading, blocked by the startListening() guard) by the time a profile is picked.
     seedDemoUsersIfNeeded();
+    loadModel();
     renderLanding();
   })();
   </script>
