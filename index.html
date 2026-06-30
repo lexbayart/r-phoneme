@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.2.1 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.2.2 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,8 +91,11 @@
    CHANGELOG
 ================================================================================
 
-     v6.2.1 (2026-06-30)
-       - FIXED: moved log toggle to header row, fixed toggle not responding [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
+      v6.2.2 (2026-06-30)
+        - FIXED: deduplicated log heading, fixed toggle wiring [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
+
+      v6.2.1 (2026-06-30)
+        - FIXED: moved log toggle to header row, fixed toggle not responding [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
 
      v6.2 (2026-06-30)
        - ADDED: log panel verbose/compact toggle — detailed inference logs hidden by default [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
@@ -843,10 +846,11 @@
     .log-header-row {
       display: flex; justify-content: space-between; align-items: center;
       padding: 10px 14px 6px; flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
     }
-    .log-header-row .panel-section-label {
-      font-size: 0.72rem; font-weight: 700; color: var(--muted);
-      text-transform: uppercase; letter-spacing: 0.1em;
+    .log-header-title {
+      font-size: 0.72rem; font-weight: 700;
+      color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em;
     }
     #btn-log-verbose {
       padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border);
@@ -1397,20 +1401,17 @@
         <button class="task-set-btn active" id="btn-set-r">Правильное Р</button>
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
       </div>
-       <div class="left-panel-label">История выполнения</div>
-       <!-- [TAG:HTML-LOG-TOGGLE] Verbose/compact toggle button -->
-       <div class="log-header-row">
-         <span class="panel-section-label">ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
-         <button id="btn-log-verbose" onclick="toggleLogVerbose()">≡ Подробно</button>
-       </div>
-       <!-- [END:HTML-LOG-TOGGLE] -->
-       <div class="panel-title">
-         <div style="display:flex;gap:6px;flex-wrap:nowrap">
-           <button id="btn-clear-log">Очистить</button>
-           <button id="btn-copy-log">Копировать</button>
-           <button id="btn-download-log">Скачать</button>
-         </div>
-       </div>
+        <!-- [TAG:HTML-LOG-TOGGLE] Verbose/compact toggle button -->
+        <div class="log-header-row">
+          <span class="log-header-title">ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
+          <button id="btn-log-verbose" onclick="toggleLogVerbose()">≡ Подробно</button>
+        </div>
+        <!-- [END:HTML-LOG-TOGGLE] -->
+        <div class="panel-title">
+          <button id="btn-clear-log">Очистить</button>
+          <button id="btn-copy-log">Копировать</button>
+          <button id="btn-download-log">Скачать</button>
+        </div>
       <!-- [END:HTML-LEFT-PANEL-LABELS] -->
       <div id="log-list"></div>
     </div>
@@ -1639,7 +1640,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-     const APP_VERSION = 'v6.2.1';
+      const APP_VERSION = 'v6.2.2';
     // [END:JS-VERSION]
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
@@ -2675,7 +2676,7 @@
       const logList = document.getElementById('log-list');
       logList.innerHTML = '';
       for (const entry of logLines) {
-        const isMilestone = entry.text.includes('══') || entry.text.includes('──') || entry.text.includes('итог');
+        const isMilestone = entry.text.includes('══') || entry.text.includes('──') || entry.text.includes('итог') || entry.text.includes('ПРЕСЕТ') || entry.text.includes('ЗАДАНИЕ') || entry.text.includes('НАБОР');
         if (!logVerbose && !isMilestone) continue;
         const row = document.createElement('div');
         row.className = 'log-row ' + (entry.detected ? 'detected' : 'noise');
@@ -2692,7 +2693,7 @@
       logLines.push({ ts, text, detected });
       if (logLines.length > MAX_LOG) logLines.shift();
 
-      const isMilestone = text.includes('══') || text.includes('──') || text.includes('итог');
+      const isMilestone = text.includes('══') || text.includes('──') || text.includes('итог') || text.includes('ПРЕСЕТ') || text.includes('ЗАДАНИЕ') || text.includes('НАБОР');
       const isDetail = ts.match(/^\d+\.\d/);
       if (!logVerbose && !isMilestone && isDetail) return;
 
