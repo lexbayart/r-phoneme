@@ -40,7 +40,7 @@
   purpose) — both are deliberate, permanent product decisions, not oversights.
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.4.1 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.5.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -128,8 +128,19 @@
    CHANGELOG
 ================================================================================
 
-       v6.4.1 (2026-06-30)
-     - ADDED: delete button for user profiles — ✕ on card, confirmation dialog, clean state reset [TAG:JS-LANDING] [TAG:CSS-LANDING]
+       v6.5.0 (2026-06-30)
+         - ADDED: two new replacement task-sets «Замена Р→В» (MODES_V, 5 cards) and
+           «Замена Р→Й» (MODES_Y, 5 cards), reusing the existing 3-level loudness
+           mechanic (LEVELS_L / renderCardL / startLevelCycle / updateLevelMonitor)
+           [TAG:JS-MODE] [TAG:JS-LEVEL-CYCLE] [TAG:JS-LANDING] [TAG:JS-CARD-NAV]
+         - CHANGED: generalized currentTaskSet === 'l' checks to currentTaskSet !== 'r'
+           throughout switchTaskSet/renderCard/startListening/stopListening so any
+           level-based set (l/v/y) shares the same code path
+         - CHANGED: completedCards now tracks {r,l,v,y}; persisted per-user in
+           localStorage under the same rph_user_* keys
+
+        v6.4.1 (2026-06-30)
+      - ADDED: delete button for user profiles — ✕ on card, confirmation dialog, clean state reset [TAG:JS-LANDING] [TAG:CSS-LANDING]
 
        v6.4.0 (2026-06-30)
      - REMOVED: verbose/compact log toggle — restored unconditional logging (v5.3 behavior) [TAG:JS-LOG]
@@ -913,7 +924,7 @@
     .log-row.detected .log-ts { color: rgba(79,255,176,0.5); }
 
     #task-set-selector {
-      display: flex; gap: 6px; padding: 8px 10px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 10px;
       border-bottom: 1px solid var(--border); flex-shrink: 0;
     }
     .task-set-btn {
@@ -1458,6 +1469,8 @@
       <div id="task-set-selector">
         <button class="task-set-btn active" id="btn-set-r">Правильное Р</button>
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
+        <button class="task-set-btn"        id="btn-set-v">Замена Р→В</button>
+        <button class="task-set-btn"        id="btn-set-y">Замена Р→Й</button>
       </div>
         <div class="panel-title">
           <span>ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
@@ -1692,7 +1705,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-      const APP_VERSION = 'v6.4.1';
+      const APP_VERSION = 'v6.5.0';
     // [END:JS-VERSION]
     document.getElementById('landing-version').textContent = 'Версия ' + APP_VERSION;
 
@@ -1712,7 +1725,7 @@
         age: 6,
         createdAt: "2026-05-10T09:00:00Z",
         lastSessionAt: "2026-06-28T14:30:00Z",
-        completedCards: { r: [0, 1, 2], l: [0, 1] }
+        completedCards: { r: [0, 1, 2], l: [0, 1], v: [], y: [] }
       },
       {
         id: "user_demo_2",
@@ -1721,7 +1734,7 @@
         age: 5,
         createdAt: "2026-05-18T10:00:00Z",
         lastSessionAt: "2026-06-25T11:00:00Z",
-        completedCards: { r: [0, 1, 2, 3, 4, 5], l: [0, 1, 2, 3, 4] }
+        completedCards: { r: [0, 1, 2, 3, 4, 5], l: [0, 1, 2, 3, 4], v: [], y: [] }
       },
       {
         id: "user_demo_3",
@@ -1730,7 +1743,7 @@
         age: 7,
         createdAt: "2026-06-01T08:00:00Z",
         lastSessionAt: "2026-06-29T16:00:00Z",
-        completedCards: { r: [0], l: [] }
+        completedCards: { r: [0], l: [], v: [], y: [] }
       }
     ];
 
@@ -1784,10 +1797,16 @@
       users.forEach(user => {
         const rDone = (user.completedCards?.r || []).length;
         const lDone = (user.completedCards?.l || []).length;
+        const vDone = (user.completedCards?.v || []).length;
+        const yDone = (user.completedCards?.y || []).length;
         const rTotal = MODES_R ? MODES_R.length : 6;
         const lTotal = MODES_L ? MODES_L.length : 10;
+        const vTotal = MODES_V ? MODES_V.length : 5;
+        const yTotal = MODES_Y ? MODES_Y.length : 5;
         const rComplete = rDone >= rTotal;
         const lComplete = lDone >= lTotal;
+        const vComplete = vDone >= vTotal;
+        const yComplete = yDone >= yTotal;
 
         const card = document.createElement('div');
         card.className = 'user-card';
@@ -1803,7 +1822,9 @@
           <div class="user-card-last">${formatLastSession(user.lastSessionAt)}</div>
           <div class="user-card-progress">
             Правильное Р: <strong>${rDone}/${rTotal}</strong> ·
-            Замена Р→Л: <strong>${lDone}/${lTotal}</strong>
+            Замена Р→Л: <strong>${lDone}/${lTotal}</strong> ·
+            Замена Р→В: <strong>${vDone}/${vTotal}</strong> ·
+            Замена Р→Й: <strong>${yDone}/${yTotal}</strong>
           </div>
           <div class="user-card-tags">
             ${rComplete
@@ -1812,6 +1833,12 @@
             ${lComplete
                ? '<span class="user-card-tag l-done">✓ Р→Л завершён</span>'
                : '<span class="user-card-tag in-progress">Р→Л: ' + lDone + '/' + lTotal + '</span>'}
+            ${vComplete
+               ? '<span class="user-card-tag r-done">✓ Р→В завершён</span>'
+               : '<span class="user-card-tag in-progress">Р→В: ' + vDone + '/' + vTotal + '</span>'}
+            ${yComplete
+               ? '<span class="user-card-tag l-done">✓ Р→Й завершён</span>'
+               : '<span class="user-card-tag in-progress">Р→Й: ' + yDone + '/' + yTotal + '</span>'}
           </div>
         `;
         card.addEventListener('click', () => selectUser(user));
@@ -1835,6 +1862,8 @@
 
       completedCards.r = new Set(user.completedCards?.r || []);
       completedCards.l = new Set(user.completedCards?.l || []);
+      completedCards.v = new Set(user.completedCards?.v || []);
+      completedCards.y = new Set(user.completedCards?.y || []);
 
       document.getElementById('landing-screen').style.display = 'none';
       document.getElementById('app-screen').style.display = 'flex';
@@ -1842,9 +1871,7 @@
       if (!classifierInitialized) {
         initApp();
       } else {
-        const firstUnfinishedR = [0,1,2,3,4,5].find(i => !completedCards.r.has(i)) ?? 0;
-        const firstUnfinishedL = [0,1,2,3,4,5,6,7,8,9].find(i => !completedCards.l.has(i)) ?? 0;
-        cardIndex = (currentTaskSet === 'r') ? firstUnfinishedR : firstUnfinishedL;
+        cardIndex = (currentTaskSet === 'r') ? firstUnfinishedIndex(MODES_R, completedCards.r) : firstUnfinishedIndex(MODES, completedCards[currentTaskSet]);
         renderCard(false);
         renderCardNav();
         updateTaskSetBtnCompletion();
@@ -1855,7 +1882,9 @@
       if (!activeUser) return;
       activeUser.completedCards = {
         r: [...completedCards.r],
-        l: [...completedCards.l]
+        l: [...completedCards.l],
+        v: [...completedCards.v],
+        y: [...completedCards.y]
       };
       activeUser.lastSessionAt = new Date().toISOString();
       saveUser(activeUser);
@@ -1911,7 +1940,7 @@
           name, surname, age: isNaN(age) ? null : age,
           createdAt: new Date().toISOString(),
           lastSessionAt: null,
-          completedCards: { r: [], l: [] }
+          completedCards: { r: [], l: [], v: [], y: [] }
         };
         saveUser(newUser);
         closeCreateModal();
@@ -1928,15 +1957,19 @@
     };
 
     function updateTaskSetBtnCompletion() {
-      const rTotal = 6;
-      const lTotal = 10;
+      const rTotal = MODES_R.length;
+      const lTotal = MODES_L.length;
+      const vTotal = MODES_V.length;
+      const yTotal = MODES_Y.length;
       const btnR = document.getElementById('btn-set-r');
       const btnL = document.getElementById('btn-set-l');
-      if (!btnR || !btnL || !activeUser) return;
-      if (completedCards.r.size >= rTotal) btnR.classList.add('completed');
-      else btnR.classList.remove('completed');
-      if (completedCards.l.size >= lTotal) btnL.classList.add('completed');
-      else btnL.classList.remove('completed');
+      const btnV = document.getElementById('btn-set-v');
+      const btnY = document.getElementById('btn-set-y');
+      if (!btnR || !btnL || !btnV || !btnY || !activeUser) return;
+      btnR.classList.toggle('completed', completedCards.r.size >= rTotal);
+      btnL.classList.toggle('completed', completedCards.l.size >= lTotal);
+      btnV.classList.toggle('completed', completedCards.v.size >= vTotal);
+      btnY.classList.toggle('completed', completedCards.y.size >= yTotal);
     }
 
     function deleteProfile(user) {
@@ -2117,6 +2150,32 @@
       },
     ];
 
+    const MODES_V = [
+      { id: 'va', emoji: '🟣', name: 'ВА — вместо РА', sound: 'ВА',
+        hint: 'Произносите слог «ва» три раза подряд — тихо, средней громкости и громко. Нижняя губа касается верхних зубов. Слог ВА — замена слогу РА.' },
+      { id: 'vo', emoji: '🔷', name: 'ВО — вместо РО', sound: 'ВО',
+        hint: 'Произносите слог «во» три раза подряд — тихо, средней громкости и громко. Губы округлены, нижняя губа у верхних зубов. Слог ВО — замена слогу РО.' },
+      { id: 'vu', emoji: '🔶', name: 'ВУ — вместо РУ', sound: 'ВУ',
+        hint: 'Произносите слог «ву» три раза подряд — тихо, средней громкости и громко. Губы вытянуты вперёд. Слог ВУ — замена слогу РУ.' },
+      { id: 'vy', emoji: '⬛', name: 'ВЫ — вместо РЫ', sound: 'ВЫ',
+        hint: 'Произносите слог «вы» три раза подряд — тихо, средней громкости и громко. Слог ВЫ — замена слогу РЫ.' },
+      { id: 've', emoji: '⬜', name: 'ВЭ — вместо РЭ', sound: 'ВЭ',
+        hint: 'Произносите слог «вэ» три раза подряд — тихо, средней громкости и громко. Слог ВЭ — замена слогу РЭ.' },
+    ];
+
+    const MODES_Y = [
+      { id: 'y_isolated', emoji: '🟡', name: 'Й — изолированный звук', sound: 'Й',
+        hint: 'Произносите звук «й» отдельно, три раза подряд — тихо, средней громкости и громко. Спинка языка поднята к нёбу.' },
+      { id: 'ya', emoji: '🟢', name: 'ЙА — вместо РА', sound: 'ЙА',
+        hint: 'Произносите слог «йа» три раза подряд — тихо, средней громкости и громко. Слог ЙА — замена слогу РА.' },
+      { id: 'yo', emoji: '🔵', name: 'ЙО — вместо РО', sound: 'ЙО',
+        hint: 'Произносите слог «йо» три раза подряд — тихо, средней громкости и громко. Слог ЙО — замена слогу РО.' },
+      { id: 'yu', emoji: '🟠', name: 'ЙУ — вместо РУ', sound: 'ЙУ',
+        hint: 'Произносите слог «йу» три раза подряд — тихо, средней громкости и громко. Слог ЙУ — замена слогу РУ.' },
+      { id: 'yy', emoji: '🔴', name: 'ЙЫ — вместо РЫ', sound: 'ЙЫ',
+        hint: 'Произносите слог «йы» три раза подряд — тихо, средней громкости и громко. Слог ЙЫ — замена слогу РЫ.' },
+    ];
+
     // [TAG:JS-LEVEL-CYCLE-DATA] ──────────────────────────────────────────────
     // 3 loudness levels for the L task-set. Bounds are in the same units as
     // micLevel.style.width — i.e. Math.sqrt(meanSquare)*500 clamped to [0,100].
@@ -2157,12 +2216,12 @@
     // completedCards[set] tracks which cardIndex values have been completed.
     // buildCardNav()  — rebuilds the #card-nav-list DOM buttons (call once on switch to L).
     // renderCardNav() — refreshes button classes: done/current/pending (call on card change).
-    const completedCards = { r: new Set(), l: new Set() };
+    const completedCards = { r: new Set(), l: new Set(), v: new Set(), y: new Set() };
 
     function buildCardNav() {
       const list = $('card-nav-list');
       list.innerHTML = '';
-      MODES_L.forEach((m, i) => {
+      MODES.forEach((m, i) => {
         const btn = document.createElement('button');
         btn.className = 'card-nav-btn';
         btn.dataset.navIdx = i;
@@ -2179,7 +2238,7 @@
     function renderCardNav() {
       const btns = $('card-nav-list').querySelectorAll('.card-nav-btn');
       btns.forEach((btn, i) => {
-        const done    = completedCards.l.has(i);
+        const done    = completedCards[currentTaskSet].has(i);
         const current = i === cardIndex;
         btn.className = 'card-nav-btn' +
           (done    ? ' done'    : '') +
@@ -2206,16 +2265,32 @@
     let lLevelIdx = 0;       // current LEVELS_L index (0..2) for the active L card
     let lZoneStart = null;   // Date.now() timestamp when mic entered the target zone (null = not in zone)
 
+    function firstUnfinishedIndex(modesArr, doneSet) {
+      for (let i = 0; i < modesArr.length; i++) {
+        if (!doneSet.has(i)) return i;
+      }
+      return 0;
+    }
+
+    function setModesFor(set) {
+      if (set === 'r') return MODES_R;
+      if (set === 'l') return MODES_L;
+      if (set === 'v') return MODES_V;
+      return MODES_Y;
+    }
+
+    const TASK_SET_LABELS = { l: 'ЗАМЕНА Р→Л', v: 'ЗАМЕНА Р→В', y: 'ЗАМЕНА Р→Й' };
+
     function switchTaskSet(set) {
       if (isListening) stopListening();
       currentTaskSet = set;
-      MODES = set === 'r' ? MODES_R : MODES_L;
-      const firstUnfinishedR = [0,1,2,3,4,5].find(i => !completedCards.r.has(i)) ?? 0;
-      const firstUnfinishedL = [0,1,2,3,4,5,6,7,8,9].find(i => !completedCards.l.has(i)) ?? 0;
-      cardIndex = (set === 'r') ? firstUnfinishedR : firstUnfinishedL;
+      MODES = setModesFor(set);
+      cardIndex = (set === 'r')
+        ? firstUnfinishedIndex(MODES_R, completedCards.r)
+        : firstUnfinishedIndex(MODES, completedCards[set]);
       lLevelIdx = 0;
       lZoneStart = null;
-      sessionStartTime = null; recStartTime = 0; // reset audio session for clean timestamps in new mode
+      sessionStartTime = null; recStartTime = 0;
       activePreset = null;
       $('task-card').classList.remove('completed');
       btnStart.textContent = '▶ Начать';
@@ -2225,19 +2300,20 @@
       renderCard(false);
       $('btn-set-r').classList.toggle('active', set === 'r');
       $('btn-set-l').classList.toggle('active', set === 'l');
-       document.querySelectorAll('.settings-section.r-only').forEach(el => {
+      $('btn-set-v').classList.toggle('active', set === 'v');
+      $('btn-set-y').classList.toggle('active', set === 'y');
+      document.querySelectorAll('.settings-section.r-only').forEach(el => {
         el.classList.toggle('hidden', set !== 'r');
       });
-      // Toggle mic level bar: hide in L mode (card has its own meter)
-      $('mic-level-wrap').style.display = set === 'l' ? 'none' : '';
-      // Toggle card nav panel: show in L mode, hide in R mode
-       $('card-nav-l').classList.toggle('visible', set === 'l');
-      if (set === 'l') buildCardNav();
-      // No log marker — switching sets is a UI action, not a recording event
+      $('mic-level-wrap').style.display = set !== 'r' ? 'none' : '';
+      $('card-nav-l').classList.toggle('visible', set !== 'r');
+      if (set !== 'r') buildCardNav();
     }
 
     $('btn-set-r').onclick = () => switchTaskSet('r');
     $('btn-set-l').onclick = () => switchTaskSet('l');
+    $('btn-set-v').onclick = () => switchTaskSet('v');
+    $('btn-set-y').onclick = () => switchTaskSet('y');
 
     // Mode buttons removed in v4.0 — task cards replace them.
     // MODES array is kept as card data source; modeGridEl is no longer in DOM.
@@ -2329,10 +2405,10 @@
       const setMarker = document.createElement('div');
       setMarker.style.cssText = 'padding:5px 10px;font-size:0.65rem;font-family:monospace;' +
         'color:#00cfff;border-left:3px solid #00cfff;background:rgba(0,207,255,0.06);letter-spacing:0.05em;';
-      setMarker.textContent = '══ НАБОР: ЗАМЕНА Р→Л ══';
+      setMarker.textContent = '══ НАБОР: ' + TASK_SET_LABELS[currentTaskSet] + ' ══';
       document.getElementById('log-list').appendChild(setMarker);
       document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
-      logLines.push({ ts: '──', text: 'SET: ЗАМЕНА Р→Л', detected: false });
+      logLines.push({ ts: '──', text: 'SET: ' + TASK_SET_LABELS[currentTaskSet], detected: false });
 
       const mc = MODES[cardIndex];
       const startMarker = document.createElement('div');
@@ -2511,7 +2587,7 @@
     let sessionLogStart  = 0; // logLines index at session start — for per-session detection count
 
     function renderCard(isRecording) {
-      if (currentTaskSet === 'l') { renderCardL(isRecording); return; }
+      if (currentTaskSet !== 'r') { renderCardL(isRecording); return; }
       const m = MODES[cardIndex];
       $('card-number').textContent    = 'Задание ' + (cardIndex + 1) + ' из ' + MODES.length;
       $('card-emoji').textContent     = m.emoji;
@@ -2560,7 +2636,7 @@
     function startPresetCycle() {
       presetCycleIdx = 0;
       // Log marker: which task set is active — written once per session start for audio sync
-      const setLabel = currentTaskSet === 'r' ? 'ПРАВИЛЬНОЕ Р' : 'ЗАМЕНА Р→Л';
+      const setLabel = currentTaskSet === 'r' ? 'ПРАВИЛЬНОЕ Р' : TASK_SET_LABELS[currentTaskSet];
       const setMarker = document.createElement('div');
       setMarker.style.cssText = 'padding:5px 10px;font-size:0.65rem;font-family:monospace;' +
         'color:#00cfff;border-left:3px solid #00cfff;background:rgba(0,207,255,0.06);letter-spacing:0.05em;';
@@ -2604,13 +2680,13 @@
       const detected  = sessionLines.filter(l => l.detected).length;
       const summary = document.createElement('div');
       summary.style.cssText = 'padding:3px 10px 5px;font-size:0.63rem;font-family:monospace;color:#4a4f62;';
-       summary.textContent = 'итог сессии: ' + detected + ' / ' + total + (currentTaskSet === 'l' ? ' уровней пройдено' : ' обнаружений');
+       summary.textContent = 'итог сессии: ' + detected + ' / ' + total + (currentTaskSet !== 'r' ? ' уровней пройдено' : ' обнаружений');
       document.getElementById('log-list').appendChild(summary);
       document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
       logLines.push({ ts: '──', text: 'SESSION TOTAL: ' + detected + '/' + total, detected: false });
       // Mark this card as completed in the nav
       completedCards[currentTaskSet].add(cardIndex);
-      if (currentTaskSet === 'l') renderCardNav();
+      if (currentTaskSet !== 'r') renderCardNav();
       persistUserProgress();
       updateTaskSetBtnCompletion();
       // Card turns fully green
@@ -2650,7 +2726,7 @@
         cardIndex = (cardIndex + 1) % MODES.length;
         card.classList.remove('completed');
         renderCard(false);
-        if (currentTaskSet === 'l') renderCardNav();
+      if (currentTaskSet !== 'r') renderCardNav();
 
         // Log marker for the new card
         const m = MODES[cardIndex];
@@ -2929,9 +3005,7 @@
         return; // error already shown in statusEl by loadModel()
       }
 
-       const firstUnfinishedR = [0,1,2,3,4,5].find(i => !completedCards.r.has(i)) ?? 0;
-       const firstUnfinishedL = [0,1,2,3,4,5,6,7,8,9].find(i => !completedCards.l.has(i)) ?? 0;
-       cardIndex = (currentTaskSet === 'r') ? firstUnfinishedR : firstUnfinishedL;
+       cardIndex = (currentTaskSet === 'r') ? firstUnfinishedIndex(MODES_R, completedCards.r) : firstUnfinishedIndex(MODES, completedCards[currentTaskSet]);
        renderCard(false);
        renderCardNav();
        updateTaskSetBtnCompletion();
@@ -3196,7 +3270,7 @@
         for (let s of raw) rms += s * s;
         const micPercent = Math.min(Math.sqrt(rms / raw.length) * 500, 100);
         micLevel.style.width = micPercent + '%';
-        if (currentTaskSet === 'l' && isListening) updateLevelMonitor(micPercent);
+        if (currentTaskSet !== 'r' && isListening) updateLevelMonitor(micPercent);
 
         const samples = nativeRate === window.MODEL_RATE ? raw : resample(raw, nativeRate, window.MODEL_RATE);
         // [TAG:JS-RINGBUFFER] ────────────────────────────────────────────────
@@ -3253,9 +3327,9 @@
         }, ms);
        }
        // [END:JS-INFERENCE]
-       if (currentTaskSet === 'l') {
-        // L task-set: no model inference needed, only mic RMS — see [TAG:JS-LEVEL-CYCLE]
-      } else {
+        if (currentTaskSet !== 'r') {
+         // Level-based task-set: no model inference needed, only mic RMS — see [TAG:JS-LEVEL-CYCLE]
+       } else {
         scheduleInference();
        }
 
@@ -3263,17 +3337,17 @@
       btnStop.style.display  = 'inline-block';
       statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${window.MODEL_RATE} Гц, окно ${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} мс)`;
        statusEl.className     = '';
-       if (currentTaskSet !== 'l') renderCard(true);   // R mode only — L mode is rendered by startLevelCycle()
-       if (currentTaskSet === 'l') {
-        startLevelCycle();
-      } else {
-        startPresetCycle(); // begin auto-cycling presets every PRESET_SLOT_SEC seconds
-      }
+        if (currentTaskSet === 'r') renderCard(true);   // R mode only — level-based sets are rendered by startLevelCycle()
+        if (currentTaskSet !== 'r') {
+         startLevelCycle();
+       } else {
+         startPresetCycle(); // begin auto-cycling presets every PRESET_SLOT_SEC seconds
+       }
     }
 
     function stopListening() {
       isListening = false;
-      if (currentTaskSet === 'l') {
+      if (currentTaskSet !== 'r') {
         stopLevelCycle();
       } else {
         stopPresetCycle();                         // clear preset cycle timer and countdown
