@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.2 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.2.1 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,8 +91,11 @@
    CHANGELOG
 ================================================================================
 
-    v6.2 (2026-06-30)
-      - ADDED: log panel verbose/compact toggle — detailed inference logs hidden by default [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
+     v6.2.1 (2026-06-30)
+       - FIXED: moved log toggle to header row, fixed toggle not responding [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
+
+     v6.2 (2026-06-30)
+       - ADDED: log panel verbose/compact toggle — detailed inference logs hidden by default [TAG:HTML-LOG-TOGGLE] [TAG:JS-LOG-TOGGLE]
 
     v6.1.2 (2026-06-30)
       - FIXED: cardIndex reset to 0 after firstUnfinished computation — v6.1.2 [TAG:JS-LANDING] [TAG:JS-MODE]
@@ -837,9 +840,25 @@
       border-color: var(--noise-color) !important;
       background: rgba(255,79,110,0.09);
     }
-    #log-toggle.active {
+    .log-header-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 14px 6px; flex-shrink: 0;
+    }
+    .log-header-row .panel-section-label {
+      font-size: 0.72rem; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.1em;
+    }
+    #btn-log-verbose {
+      padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 0.68rem; font-weight: 600; background: var(--bg);
+      color: var(--muted); cursor: pointer; transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    #btn-log-verbose:hover { color: var(--text); border-color: var(--muted); }
+    #btn-log-verbose.active {
       color: var(--r-color);
       border-color: rgba(79,255,176,0.4);
+      background: rgba(79,255,176,0.06);
     }
     #log-list {
       flex: 1; overflow-y: auto; font-family: monospace; font-size: 0.68rem;
@@ -1378,17 +1397,20 @@
         <button class="task-set-btn active" id="btn-set-r">Правильное Р</button>
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
       </div>
-      <div class="left-panel-label">История выполнения</div>
-      <!-- [TAG:HTML-LOG-TOGGLE] Verbose/compact toggle button -->
-      <div class="panel-title">
-        <div style="display:flex;gap:6px;flex-wrap:nowrap">
-          <button id="btn-clear-log">Очистить</button>
-          <button id="btn-copy-log">Копировать</button>
-          <button id="btn-download-log">Скачать</button>
-          <button id="log-toggle" class="panel-title-btn">≡ Подробно</button>
-        </div>
-      </div>
-      <!-- [END:HTML-LOG-TOGGLE] -->
+       <div class="left-panel-label">История выполнения</div>
+       <!-- [TAG:HTML-LOG-TOGGLE] Verbose/compact toggle button -->
+       <div class="log-header-row">
+         <span class="panel-section-label">ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
+         <button id="btn-log-verbose" onclick="toggleLogVerbose()">≡ Подробно</button>
+       </div>
+       <!-- [END:HTML-LOG-TOGGLE] -->
+       <div class="panel-title">
+         <div style="display:flex;gap:6px;flex-wrap:nowrap">
+           <button id="btn-clear-log">Очистить</button>
+           <button id="btn-copy-log">Копировать</button>
+           <button id="btn-download-log">Скачать</button>
+         </div>
+       </div>
       <!-- [END:HTML-LEFT-PANEL-LABELS] -->
       <div id="log-list"></div>
     </div>
@@ -1617,7 +1639,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v6.2';
+     const APP_VERSION = 'v6.2.1';
     // [END:JS-VERSION]
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
@@ -2642,7 +2664,7 @@
     function toggleLogVerbose() {
       logVerbose = !logVerbose;
       localStorage.setItem('rph_log_verbose', logVerbose ? '1' : '0');
-      const btn = document.getElementById('log-toggle');
+      const btn = document.getElementById('btn-log-verbose');
       btn.textContent = logVerbose ? '≡ Кратко' : '≡ Подробно';
       if (logVerbose) btn.classList.add('active');
       else btn.classList.remove('active');
@@ -2706,7 +2728,7 @@
     };
 
     // Log verbose/compact toggle initialization
-    const logToggleBtn = $('log-toggle');
+    const logToggleBtn = $('btn-log-verbose');
     logToggleBtn.textContent = logVerbose ? '≡ Кратко' : '≡ Подробно';
     if (logVerbose) logToggleBtn.classList.add('active');
 
