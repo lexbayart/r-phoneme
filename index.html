@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-30  v6.0 (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-30  v6.1 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -90,6 +90,16 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+  v6.1 (2026-06-30)
+    - CHANGED: L progress tags on user cards: "Л: N/10" → "Р→Л: N/10" [TAG:JS-LANDING]
+    - CHANGED: "✓ Л завершён" → "✓ Р→Л завершён" [TAG:JS-LANDING]
+    - ADDED: task-set-btn turns green when all cards in a set are completed [TAG:CSS-LANDING] [TAG:JS-LANDING]
+    - ADDED: updateTaskSetBtnCompletion() — called on selectUser and onSessionComplete [TAG:JS-LANDING]
+    - ADDED: pencil edit button on user cards — edit name, surname, age inline [TAG:JS-LANDING] [TAG:CSS-LANDING]
+    - FIXED: card nav and completion state not rendered on first user selection [TAG:JS-LANDING]
+    - REMOVED: leftover feature/user-profiles branch
+    - Update APP_VERSION to 'v6.1' [TAG:JS-VERSION]
 
   v6.0 (2026-06-30)
     - ADDED: User profile landing screen — grid of user cards shown before the app [TAG:HTML-LANDING] [TAG:CSS-LANDING] [TAG:JS-LANDING]
@@ -848,6 +858,15 @@
       border-color: var(--accent); color: var(--accent);
       background: rgba(123,97,255,0.1);
     }
+    .task-set-btn.completed {
+      border-color: rgba(79,255,176,0.6);
+      color: var(--r-color);
+      background: rgba(79,255,176,0.08);
+    }
+    .task-set-btn.completed.active {
+      border-color: var(--r-color);
+      background: rgba(79,255,176,0.15);
+    }
 
     /* ── Центральная панель: приложение ── */
     .panel-main {
@@ -1238,6 +1257,14 @@
     .user-card-tag.in-progress {
       color: var(--muted); border-color: var(--border); background: transparent;
     }
+    .user-card-edit-btn {
+      background: none; border: none; cursor: pointer;
+      font-size: 0.85rem; padding: 2px 4px; border-radius: 4px;
+      opacity: 0.4; transition: opacity 0.15s;
+      line-height: 1;
+    }
+    .user-card:hover .user-card-edit-btn { opacity: 1; }
+
     .user-card-progress {
       font-size: 0.72rem; color: var(--muted);
     }
@@ -1572,7 +1599,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v6.0';
+    const APP_VERSION = 'v6.1';
     // [END:JS-VERSION]
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
@@ -1669,7 +1696,10 @@
         card.innerHTML = `
           <div class="user-card-header">
             <div class="user-card-name">${user.name}${user.surname ? ' ' + user.surname : ''}</div>
-            <div class="user-card-age">${user.age} лет</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <button class="user-card-edit-btn" data-id="${user.id}" title="Редактировать">✏️</button>
+              <div class="user-card-age">${user.age ? user.age + ' лет' : '—'}</div>
+            </div>
           </div>
           <div class="user-card-last">${formatLastSession(user.lastSessionAt)}</div>
           <div class="user-card-progress">
@@ -1678,14 +1708,18 @@
           </div>
           <div class="user-card-tags">
             ${rComplete
-              ? '<span class="user-card-tag r-done">✓ Р завершён</span>'
-              : '<span class="user-card-tag in-progress">Р: ' + rDone + '/' + rTotal + '</span>'}
+               ? '<span class="user-card-tag r-done">✓ Р завершён</span>'
+               : '<span class="user-card-tag in-progress">Р: ' + rDone + '/' + rTotal + '</span>'}
             ${lComplete
-              ? '<span class="user-card-tag l-done">✓ Л завершён</span>'
-              : '<span class="user-card-tag in-progress">Л: ' + lDone + '/' + lTotal + '</span>'}
+               ? '<span class="user-card-tag l-done">✓ Р→Л завершён</span>'
+               : '<span class="user-card-tag in-progress">Р→Л: ' + lDone + '/' + lTotal + '</span>'}
           </div>
         `;
         card.addEventListener('click', () => selectUser(user));
+        card.querySelector('.user-card-edit-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          openEditModal(user);
+        });
         grid.appendChild(card);
       });
     }
@@ -1708,6 +1742,7 @@
       } else {
         renderCard(false);
         renderCardNav();
+        updateTaskSetBtnCompletion();
       }
     }
 
@@ -1721,6 +1756,18 @@
       saveUser(activeUser);
     }
 
+    let editingUserId = null;
+
+    function openEditModal(user) {
+      editingUserId = user.id;
+      document.getElementById('modal-name').value = user.name || '';
+      document.getElementById('modal-surname').value = user.surname || '';
+      document.getElementById('modal-age').value = user.age || '';
+      document.getElementById('modal-create').textContent = 'Сохранить';
+      document.getElementById('create-modal').style.display = 'flex';
+      document.getElementById('modal-name').focus();
+    }
+
     function openCreateModal() {
       document.getElementById('modal-name').value = '';
       document.getElementById('modal-surname').value = '';
@@ -1731,6 +1778,8 @@
 
     function closeCreateModal() {
       document.getElementById('create-modal').style.display = 'none';
+      editingUserId = null;
+      document.getElementById('modal-create').textContent = 'Создать';
     }
 
     document.getElementById('modal-cancel').addEventListener('click', closeCreateModal);
@@ -1740,16 +1789,29 @@
       const surname = document.getElementById('modal-surname').value.trim();
       const age = parseInt(document.getElementById('modal-age').value, 10);
       if (!name) { document.getElementById('modal-name').focus(); return; }
-      const newUser = {
-        id: 'user_' + Date.now(),
-        name, surname, age: isNaN(age) ? null : age,
-        createdAt: new Date().toISOString(),
-        lastSessionAt: null,
-        completedCards: { r: [], l: [] }
-      };
-      saveUser(newUser);
-      closeCreateModal();
-      selectUser(newUser);
+
+      if (editingUserId) {
+        const existing = JSON.parse(localStorage.getItem(STORAGE_PREFIX_USER + editingUserId));
+        existing.name = name;
+        existing.surname = surname;
+        existing.age = isNaN(age) ? null : age;
+        saveUser(existing);
+        editingUserId = null;
+        document.getElementById('modal-create').textContent = 'Создать';
+        closeCreateModal();
+        renderLanding();
+      } else {
+        const newUser = {
+          id: 'user_' + Date.now(),
+          name, surname, age: isNaN(age) ? null : age,
+          createdAt: new Date().toISOString(),
+          lastSessionAt: null,
+          completedCards: { r: [], l: [] }
+        };
+        saveUser(newUser);
+        closeCreateModal();
+        selectUser(newUser);
+      }
     });
 
     window.goBackToLanding = function() {
@@ -1759,6 +1821,18 @@
       document.getElementById('landing-screen').style.display = 'flex';
       renderLanding();
     };
+
+    function updateTaskSetBtnCompletion() {
+      const rTotal = 6;
+      const lTotal = 10;
+      const btnR = document.getElementById('btn-set-r');
+      const btnL = document.getElementById('btn-set-l');
+      if (!btnR || !btnL || !activeUser) return;
+      if (completedCards.r.size >= rTotal) btnR.classList.add('completed');
+      else btnR.classList.remove('completed');
+      if (completedCards.l.size >= lTotal) btnL.classList.add('completed');
+      else btnL.classList.remove('completed');
+    }
 
     // [END:JS-LANDING]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
@@ -2400,6 +2474,7 @@
       completedCards[currentTaskSet].add(cardIndex);
       if (currentTaskSet === 'l') renderCardNav();
       persistUserProgress();
+      updateTaskSetBtnCompletion();
       // Card turns fully green
       $('task-card').classList.add('completed');
       $('card-footer').textContent = '🎉 Задание выполнено!';
@@ -2688,6 +2763,8 @@
       debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
       statusEl.textContent = 'Модель готова.';
       renderCard(false);
+      renderCardNav();
+      updateTaskSetBtnCompletion();
     }
 
     // [END:JS-MODEL-INIT]
