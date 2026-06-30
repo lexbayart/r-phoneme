@@ -40,7 +40,7 @@
   purpose) — both are deliberate, permanent product decisions, not oversights.
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.5.0 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.6.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -127,6 +127,18 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+       v6.6.0 (2026-06-30)
+         - FIXED: audio (.wav) and log (.txt) downloads were silently concatenating
+           across task-set switches (R + Л + В + Й all merged into one continuous
+           recording/log). Each task-set now has its own independent buffer that
+           persists when you switch away and resumes exactly where it left off
+           when you switch back. [TAG:JS-SESSION-STORE] [TAG:JS-MODE]
+         - FIXED: switching users did not reset audio/log buffers — previous
+           user's recording could leak into a new user's session. [TAG:JS-LANDING]
+         - ADDED: downloaded .wav/.txt filenames now include the active user's
+           name, surname, age, and the task-set label instead of a bare timestamp.
+           [TAG:JS-FILENAME] [TAG:JS-RECORDER] [TAG:JS-LOG]
 
        v6.5.0 (2026-06-30)
          - ADDED: two new replacement task-sets «Замена Р→В» (MODES_V, 5 cards) and
@@ -1705,7 +1717,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-      const APP_VERSION = 'v6.5.0';
+      const APP_VERSION = 'v6.6.0';
     // [END:JS-VERSION]
     document.getElementById('landing-version').textContent = 'Версия ' + APP_VERSION;
 
@@ -1857,8 +1869,12 @@
     function selectUser(user) {
       activeUser = user;
 
-      logLines.length = 0;
-      logList.innerHTML = '';
+      // Fresh per-user session buffers — previous user's audio/log must not bleed in
+      sessionStore.r = emptySessionState();
+      sessionStore.l = emptySessionState();
+      sessionStore.v = emptySessionState();
+      sessionStore.y = emptySessionState();
+      loadSessionState(currentTaskSet); // binds logLines/wavChunks/etc to the fresh buffer, redraws (empty) log
 
       completedCards.r = new Set(user.completedCards?.r || []);
       completedCards.l = new Set(user.completedCards?.l || []);
@@ -2218,6 +2234,80 @@
     // renderCardNav() — refreshes button classes: done/current/pending (call on card change).
     const completedCards = { r: new Set(), l: new Set(), v: new Set(), y: new Set() };
 
+    // [TAG:JS-SESSION-STORE] ──────────────────────────────────────────────
+    // Each task-set (r/l/v/y) keeps its OWN independent log + audio recording
+    // buffer. Switching task-sets swaps which buffer the shared `logLines` /
+    // `wavChunks` / etc. variables point to — it does NOT clear or merge them.
+    // This is what makes "log/audio per task-set, not one continuous stream"
+    // possible while reusing all existing addLog()/recCollect()/recDownloadWav()
+    // code unchanged (they just operate on whichever buffer is currently bound).
+    function emptySessionState() {
+      return {
+        logLines: [], wavChunks: [], wavTotalSmp: 0,
+        recStartTime: 0, recStopTime: 0, sessionStartTime: 0, sessionLogStart: 0,
+      };
+    }
+    const sessionStore = {
+      r: emptySessionState(), l: emptySessionState(),
+      v: emptySessionState(), y: emptySessionState(),
+    };
+
+    // Redraws #log-list from the currently-bound logLines array (used after
+    // swapping buffers on task-set switch). Markers (set/card dividers) are
+    // redrawn in a simplified generic style — only the per-frame data rows
+    // need pixel-perfect restoration, since those are what get exported.
+    function renderLogList() {
+      logList.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      logLines.forEach(l => {
+        const row = document.createElement('div');
+        if (l.ts === '──') {
+          row.className = 'log-row noise';
+          row.innerHTML = `<span class="log-ts">──</span><span>${l.text}</span>`;
+        } else {
+          row.className = 'log-row ' + (l.detected ? 'detected' : 'noise');
+          row.innerHTML = `<span class="log-ts">${l.ts}</span><span>${l.text}${l.detected ? ' ✓' : ''}</span>`;
+        }
+        frag.appendChild(row);
+      });
+      logList.appendChild(frag);
+      logList.scrollTop = logList.scrollHeight;
+    }
+
+    // Saves the currently-bound buffer back into sessionStore[set], called
+    // right before switching away from `set`.
+    function saveSessionState(set) {
+      sessionStore[set] = {
+        logLines, wavChunks, wavTotalSmp,
+        recStartTime, recStopTime, sessionStartTime, sessionLogStart,
+      };
+    }
+
+    // Loads sessionStore[set] into the shared variables and redraws the log +
+    // download-audio button state, called right after switching to `set`.
+    function loadSessionState(set) {
+      const st = sessionStore[set];
+      logLines        = st.logLines;
+      wavChunks       = st.wavChunks;
+      wavTotalSmp     = st.wavTotalSmp;
+      recStartTime    = st.recStartTime;
+      recStopTime     = st.recStopTime;
+      sessionStartTime = st.sessionStartTime;
+      sessionLogStart  = st.sessionLogStart;
+      renderLogList();
+      const dlBtn = $('btn-download-audio');
+      if (wavTotalSmp > 0) {
+        dlBtn.disabled = false;
+        dlBtn.classList.remove('btn-download-disabled');
+        dlBtn.classList.add('btn-download-enabled');
+      } else {
+        dlBtn.disabled = true;
+        dlBtn.classList.remove('btn-download-enabled');
+        dlBtn.classList.add('btn-download-disabled');
+      }
+    }
+    // [END:JS-SESSION-STORE]
+
     function buildCardNav() {
       const list = $('card-nav-list');
       list.innerHTML = '';
@@ -2279,10 +2369,33 @@
       return MODES_Y;
     }
 
-    const TASK_SET_LABELS = { l: 'ЗАМЕНА Р→Л', v: 'ЗАМЕНА Р→В', y: 'ЗАМЕНА Р→Й' };
+    const TASK_SET_LABELS = { r: 'ПРАВИЛЬНОЕ Р', l: 'ЗАМЕНА Р→Л', v: 'ЗАМЕНА Р→В', y: 'ЗАМЕНА Р→Й' };
+
+    // [TAG:JS-FILENAME] ─────────────────────────────────────────────────────
+    // Builds the "<Имя_Фамилия_Возраст>_<ЗАДАНИЕ>_<timestamp>" prefix shared
+    // by both WAV and log downloads, so files are identifiable per child and
+    // per task-set without opening them.
+    function sanitizeFilenamePart(s) {
+      return String(s || '').trim().replace(/[^\wА-Яа-яЁё-]+/g, '_');
+    }
+    function getUserFileTag() {
+      if (!activeUser) return 'guest';
+      const parts = [activeUser.name, activeUser.surname].filter(Boolean).join('_');
+      const agePart = activeUser.age ? activeUser.age + 'let' : '';
+      return sanitizeFilenamePart(parts) + (agePart ? '_' + agePart : '');
+    }
+    function getTaskFileTag() {
+      const label = TASK_SET_LABELS[currentTaskSet] || currentTaskSet;
+      return sanitizeFilenamePart(label.replace(/→/g, '-to-'));
+    }
+    function getFilenamePrefix() {
+      return getUserFileTag() + '_' + getTaskFileTag();
+    }
+    // [END:JS-FILENAME]
 
     function switchTaskSet(set) {
       if (isListening) stopListening();
+      saveSessionState(currentTaskSet);
       currentTaskSet = set;
       MODES = setModesFor(set);
       cardIndex = (set === 'r')
@@ -2290,7 +2403,7 @@
         : firstUnfinishedIndex(MODES, completedCards[set]);
       lLevelIdx = 0;
       lZoneStart = null;
-      sessionStartTime = null; recStartTime = 0;
+      loadSessionState(set); // restores this set's own log + audio buffer (does NOT clear it)
       activePreset = null;
       $('task-card').classList.remove('completed');
       btnStart.textContent = '▶ Начать';
@@ -2636,7 +2749,7 @@
     function startPresetCycle() {
       presetCycleIdx = 0;
       // Log marker: which task set is active — written once per session start for audio sync
-      const setLabel = currentTaskSet === 'r' ? 'ПРАВИЛЬНОЕ Р' : TASK_SET_LABELS[currentTaskSet];
+      const setLabel = TASK_SET_LABELS[currentTaskSet];
       const setMarker = document.createElement('div');
       setMarker.style.cssText = 'padding:5px 10px;font-size:0.65rem;font-family:monospace;' +
         'color:#00cfff;border-left:3px solid #00cfff;background:rgba(0,207,255,0.06);letter-spacing:0.05em;';
@@ -2834,7 +2947,7 @@
     //
     // addLog(ts, r, noise, unknown, detected, peak): appends one row to #log-list.
     // logLines[] grows without limit for full-session export. Unconditional logging.
-    const logLines = []; // { ts, text, detected }
+    let logLines = []; // { ts, text, detected } — reassigned on task-set switch, see [TAG:JS-SESSION-STORE]
 
     function addLog(ts, r, noise, unknown, detected, peak) {
       const text = `r=${(r*100).toFixed(0)}% n=${(noise*100).toFixed(0)}% u=${(unknown*100).toFixed(0)}% pk=${peak}`;
@@ -2847,10 +2960,11 @@
     }
 
     $('btn-clear-log').onclick = () => {
-      logLines.length = 0;
+      logLines = [];
       logList.innerHTML = '';
       // Also wipe the parallel audio recording so WAV and log stay in sync
       wavChunks = []; wavTotalSmp = 0; recStartTime = 0; recStopTime = 0; sessionStartTime = 0;
+      sessionStore[currentTaskSet] = emptySessionState(); // clear persisted copy too — only THIS set's buffer
       const dlBtn = $('btn-download-audio');
       dlBtn.disabled = true;
       dlBtn.classList.remove('btn-download-enabled');
@@ -2933,7 +3047,7 @@
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href = url;
-      a.download = 'r-log-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+      a.download = getFilenamePrefix() + '_log_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -3204,7 +3318,8 @@
       const blob = new Blob([buf], { type: 'audio/wav' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href = url; a.download = 'r-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.wav';
+      a.href = url;
+      a.download = getFilenamePrefix() + '_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.wav';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
