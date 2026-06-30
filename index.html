@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-   Last updated: 2026-06-30  v6.3.0 (see APP_VERSION in [TAG:JS-VERSION])
+   Last updated: 2026-06-30  v6.4.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,7 +91,11 @@
    CHANGELOG
 ================================================================================
 
-       v6.3.0 (2026-06-30)
+       v6.4.0 (2026-06-30)
+    - REMOVED: verbose/compact log toggle — restored unconditional logging (v5.3 behavior) [TAG:JS-LOG]
+    - ADDED: app version label on landing screen [TAG:HTML-LANDING]
+
+        v6.3.0 (2026-06-30)
          - FIXED: inference loop died after first tick — NUM_SAMPLES undeclared in scheduleInference() [TAG:JS-INFERENCE]
          - FIXED: compact log mode showed nothing — isMilestone checked wrong field (text vs ts) [TAG:JS-LOG]
          - FIXED: log data truncated at 500 entries — removed cap on logLines array, DOM render capped at 5000 [TAG:JS-LOG]
@@ -514,9 +518,8 @@
   [TAG:JS-SETTINGS]          getSettings(), slider value bindings
   [TAG:JS-PRESETS]           PRESETS array definition + applyPreset()
   [TAG:JS-MODE]              MODES array for task cards; preset buttons rendering
-  [TAG:JS-LOG]               addLog(), copy log, download log (.txt), clear log + audio reset
-  [TAG:JS-LOG-TOGGLE]        Verbose/compact toggle for log panel, reRenderLog()
-  [TAG:JS-LOG-EMPTY-GUARD]   Guard: block download when log empty; red button, error sound, auto-remove message
+   [TAG:JS-LOG]               addLog(), copy log, download log (.txt), clear log + audio reset
+   [TAG:JS-LOG-EMPTY-GUARD]   Guard: block download when log empty; red button, error sound, auto-remove message
   [TAG:JS-VERSION]           APP_VERSION constant — single source of truth for version number
   [TAG:JS-MODEL-INIT]        Model init, getProperties(), debug line
   [TAG:JS-BARS]              buildBars(), renderResult() — UI update per frame
@@ -847,27 +850,6 @@
       color: var(--noise-color) !important;
       border-color: var(--noise-color) !important;
       background: rgba(255,79,110,0.09);
-    }
-    .log-header-row {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 10px 14px 6px; flex-shrink: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .log-header-title {
-      font-size: 0.72rem; font-weight: 700;
-      color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em;
-    }
-    #btn-log-verbose {
-      padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border);
-      font-size: 0.68rem; font-weight: 600; background: var(--bg);
-      color: var(--muted); cursor: pointer; transition: color 0.15s, border-color 0.15s;
-      white-space: nowrap; flex-shrink: 0;
-    }
-    #btn-log-verbose:hover { color: var(--text); border-color: var(--muted); }
-    #btn-log-verbose.active {
-      color: var(--r-color);
-      border-color: rgba(79,255,176,0.4);
-      background: rgba(79,255,176,0.06);
     }
     #log-list {
       flex: 1; overflow-y: auto; font-family: monospace; font-size: 0.68rem;
@@ -1353,6 +1335,10 @@
       font-family: 'Inter', sans-serif;
     }
     .btn-back:hover { color: var(--text); border-color: var(--muted); }
+    .landing-version {
+      font-size: 0.65rem; color: var(--muted); text-align: center;
+      margin: 0; opacity: 0.6;
+    }
     /* [END:CSS-LANDING] */
   </style>
 </head>
@@ -1362,6 +1348,7 @@
     <div class="landing-header">
       <h1>Детектор <span>«Р»</span></h1>
       <p class="landing-subtitle">Выберите профиль или создайте новый</p>
+      <p class="landing-version" id="landing-version"></p>
     </div>
     <div id="user-grid" class="user-grid">
     </div>
@@ -1406,13 +1393,8 @@
         <button class="task-set-btn active" id="btn-set-r">Правильное Р</button>
         <button class="task-set-btn"        id="btn-set-l">Замена Р→Л</button>
       </div>
-        <!-- [TAG:HTML-LOG-TOGGLE] Verbose/compact toggle button -->
-        <div class="log-header-row">
-          <span class="log-header-title">ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
-          <button id="btn-log-verbose" onclick="toggleLogVerbose()">≡ Подробно</button>
-        </div>
-        <!-- [END:HTML-LOG-TOGGLE] -->
         <div class="panel-title">
+          <span>ИСТОРИЯ ВЫПОЛНЕНИЯ</span>
           <button id="btn-clear-log">Очистить</button>
           <button id="btn-copy-log">Копировать</button>
           <button id="btn-download-log">Скачать</button>
@@ -1645,8 +1627,9 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-      const APP_VERSION = 'v6.3.0';
+      const APP_VERSION = 'v6.4.0';
     // [END:JS-VERSION]
+    document.getElementById('landing-version').textContent = 'Версия ' + APP_VERSION;
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
     // User profile landing screen: storage, render, navigation.
@@ -2380,8 +2363,14 @@
       else if (status === 'over')  logSuffix = ' — слишком громко';
       else if (lLevelIdx === 0)    logSuffix = ' — тишина';
        else                         logSuffix = ' — тише нужного';
-      const rowText = mc.sound.toUpperCase() + ' [' + lvl.label + '] ' + micPercent.toFixed(0) + '%' + logSuffix;
+       const rowText = mc.sound.toUpperCase() + ' [' + lvl.label + '] ' + micPercent.toFixed(0) + '%' + logSuffix;
        logLines.push({ ts, text: rowText, detected: status === 'ok' });
+
+       const row = document.createElement('div');
+       row.className = 'log-row ' + (status === 'ok' ? 'detected' : 'noise');
+       row.innerHTML = `<span class="log-ts">${ts}</span><span>${rowText}</span>`;
+       logList.appendChild(row);
+       requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
 
        // ── sustained in-zone hold → level passed ───────────────────────────
       if (status === 'ok') {
@@ -2662,52 +2651,16 @@
 
     // [TAG:JS-LOG] ───────────────────────────────────────────────────────────
     // addLog(ts, r, noise, unknown, detected, peak): appends one row to #log-list.
-    // logLines[] grows without limit for full-session export. DOM render capped at 5000.
+    // logLines[] grows without limit for full-session export. Unconditional logging.
     const logLines = []; // { ts, text, detected }
-
-    // [TAG:JS-LOG-TOGGLE] Verbose/compact toggle for log panel
-    let logVerbose = localStorage.getItem('rph_log_verbose') === '1';
-
-    function toggleLogVerbose() {
-      logVerbose = !logVerbose;
-      localStorage.setItem('rph_log_verbose', logVerbose ? '1' : '0');
-      const btn = document.getElementById('btn-log-verbose');
-      btn.textContent = logVerbose ? '≡ Кратко' : '≡ Подробно';
-      if (logVerbose) btn.classList.add('active');
-      else btn.classList.remove('active');
-      reRenderLog();
-    }
-
-    function reRenderLog() {
-      const logList = document.getElementById('log-list');
-      logList.innerHTML = '';
-      for (const entry of logLines) {
-        const isMilestone = entry.ts === '──';
-        if (!logVerbose && !isMilestone) continue;
-        const row = document.createElement('div');
-        row.className = 'log-row ' + (entry.detected ? 'detected' : 'noise');
-        row.innerHTML = `<span class="log-ts">${entry.ts}</span><span>${entry.text}${entry.detected ? ' ✓' : ''}</span>`;
-        logList.appendChild(row);
-      }
-      logList.scrollTop = logList.scrollHeight;
-    }
-
-    // [END:JS-LOG-TOGGLE]
 
     function addLog(ts, r, noise, unknown, detected, peak) {
       const text = `r=${(r*100).toFixed(0)}% n=${(noise*100).toFixed(0)}% u=${(unknown*100).toFixed(0)}% pk=${peak}`;
-       logLines.push({ ts, text, detected });
-
-       const isMilestone = ts === '──';
-       const isDetail = ts.match(/^\d+\.\d/);
-      if (!logVerbose && !isMilestone && isDetail) return;
-
+      logLines.push({ ts, text, detected });
       const row = document.createElement('div');
       row.className = 'log-row ' + (detected ? 'detected' : 'noise');
       row.innerHTML = `<span class="log-ts">${ts}</span><span>${text}${detected ? ' ✓' : ''}</span>`;
       logList.appendChild(row);
-      // Убираем старые DOM-строки
-       while (logList.children.length > 5000) logList.removeChild(logList.firstChild);
       requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
     }
 
@@ -2732,11 +2685,6 @@
         setTimeout(() => btn.textContent = 'Копировать', 1500);
       });
     };
-
-    // Log verbose/compact toggle initialization
-    const logToggleBtn = $('btn-log-verbose');
-    logToggleBtn.textContent = logVerbose ? '≡ Кратко' : '≡ Подробно';
-    if (logVerbose) logToggleBtn.classList.add('active');
 
     // [TAG:JS-LOG-EMPTY-GUARD] Guard: block download when log is empty
     const emptyGuardMsgId = '__empty_guard_msg__';
