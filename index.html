@@ -473,7 +473,7 @@
 
   Run locally:
     cd <folder> && python3 -m http.server 8082
-    Open: http://localhost:8082/r-detector.html
+    Open: http://localhost:8082/index.html
 
   Layout: 3-column flex row
     ┌──────────────┬──────────────────┬──────────────┐
@@ -1011,6 +1011,18 @@
 
     /* [END:CSS-BUTTONS] */
 
+    /* Download button states */
+    .btn-download-enabled {
+      padding:12px 32px;border-radius:12px;border:2px solid #4fffb0;
+      background:rgba(79,255,176,0.12);color:#4fffb0;font-size:0.95rem;font-weight:600;
+      cursor:pointer;transition:all 0.2s;width:100%;max-width:340px;
+    }
+    .btn-download-disabled {
+      padding:12px 32px;border-radius:12px;border:1px solid var(--border);
+      background:var(--surface);color:var(--muted);font-size:0.95rem;font-weight:600;
+      cursor:not-allowed;transition:all 0.2s;width:100%;max-width:340px;
+    }
+
     /* [TAG:CSS-STATUS] */
     #status { font-size: 0.75rem; color: var(--muted); text-align: center; min-height: 1.2em; }
     #status.error { color: var(--noise-color); }
@@ -1067,6 +1079,7 @@
 
     /* [TAG:CSS-CARD-NAV] L task-set right panel: card navigation list */
     #card-nav-l { display: none; }
+    #card-nav-l.visible { display: block; }
     .card-nav-btn {
       width: 100%; padding: 9px 10px; border-radius: 8px;
       border: 1px solid var(--border); background: var(--bg);
@@ -1091,6 +1104,7 @@
     .card-nav-btn.done .nav-check { opacity: 1; }
     /* [END:CSS-CARD-NAV] */
 
+    .settings-section.r-only.hidden { display: none; }
     /* [END:CSS-SETTINGS-PANEL] */
 
     /* [TAG:CSS-COUNTDOWN] */
@@ -1401,15 +1415,15 @@
     <div class="modal-box">
       <div class="modal-title">Новый пользователь</div>
       <div class="modal-field">
-        <label>Имя</label>
+        <label for="modal-name">Имя</label>
         <input id="modal-name" type="text" placeholder="Например: Миша" maxlength="32">
       </div>
       <div class="modal-field">
-        <label>Фамилия</label>
+        <label for="modal-surname">Фамилия</label>
         <input id="modal-surname" type="text" placeholder="Необязательно" maxlength="32">
       </div>
       <div class="modal-field">
-        <label>Возраст</label>
+        <label for="modal-age">Возраст</label>
         <input id="modal-age" type="number" min="2" max="18" placeholder="лет">
       </div>
       <div class="modal-actions">
@@ -1450,7 +1464,7 @@
 
     <!-- [TAG:HTML-MAIN-PANEL] ─────────────────────────────────── -->
     <div class="panel-main">
-      <button id="btn-back-to-profiles" class="btn-back" onclick="goBackToLanding()">← Профили</button>
+      <button id="btn-back-to-profiles" class="btn-back">← Профили</button>
       <!-- [TAG:HTML-TASK-CARD] Task card: shows current exercise -->
       <div class="task-card" id="task-card">
         <div class="task-card-number" id="card-number">Задание 1 из 6</div>
@@ -1501,10 +1515,7 @@
 
       <div id="countdown"></div>
 
-      <button id="btn-download-audio" disabled
-        style="padding:12px 32px;border-radius:12px;border:1px solid var(--border);
-               background:var(--surface);color:var(--muted);font-size:0.95rem;font-weight:600;
-               cursor:not-allowed;transition:all 0.2s;width:100%;max-width:340px;">
+      <button id="btn-download-audio" disabled class="btn-download-disabled">
         ⬇ Скачать аудиозапись
       </button>
 
@@ -1914,6 +1925,7 @@
 
     // [END:JS-LANDING]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
+    let sessionGen = 0;       // generation counter for stale-session detection
     let confettiActive = false;
     const statusEl  = $('status');
     const debugInfoEl = $('debug-info');
@@ -2089,7 +2101,9 @@
     //   Громко (idx 2): PASS if mic ≥ min  |  FAIL if mic < min (too quiet)
     //                  No upper limit — shouting is fine, won't count as failure.
     //
-    // NOISE_FLOOR: below this, mic is considered silence (user not speaking).
+    // NOISE_FLOOR: level-meter's visual "under" threshold for color/fill purposes ONLY.
+    // NOT the pass/fail silence threshold — that is WHISPER_THRESHOLD (0.5%).
+    // If micPercent < NOISE_FLOOR, the meter fill shows no color (empty bar).
     const NOISE_FLOOR = 1.5;
     const LEVELS_L = [
       { key: 'quiet',  label: 'Тихо',   sizeClass: 'lvl-small',  max: 8,
@@ -2181,13 +2195,13 @@
       renderCard(false);
       $('btn-set-r').classList.toggle('active', set === 'r');
       $('btn-set-l').classList.toggle('active', set === 'l');
-      document.querySelectorAll('.settings-section.r-only').forEach(el => {
-        el.style.display = set === 'r' ? '' : 'none';
+       document.querySelectorAll('.settings-section.r-only').forEach(el => {
+        el.classList.toggle('hidden', set !== 'r');
       });
       // Toggle mic level bar: hide in L mode (card has its own meter)
       $('mic-level-wrap').style.display = set === 'l' ? 'none' : '';
       // Toggle card nav panel: show in L mode, hide in R mode
-      $('card-nav-l').style.display = set === 'l' ? 'block' : 'none';
+       $('card-nav-l').classList.toggle('visible', set === 'l');
       if (set === 'l') buildCardNav();
       // No log marker — switching sets is a UI action, not a recording event
     }
@@ -2426,19 +2440,21 @@
        requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
 
        // ── sustained in-zone hold → level passed ───────────────────────────
-      if (status === 'ok') {
+       if (status === 'ok') {
         if (!lZoneStart) lZoneStart = Date.now();
         if (Date.now() - lZoneStart >= ZONE_HOLD_MS) {
           lZoneStart = null;
-          setTimeout(advanceLevel, 0); // defer past this audio callback
+          const gen = sessionGen; // capture current generation by value
+          setTimeout(() => advanceLevel(gen), 0); // defer past this audio callback
         }
       } else {
         lZoneStart = null;
       }
     }
 
-    function advanceLevel() {
+    function advanceLevel(capturedGen) {
       if (!isListening) return; // user already stopped — ignore stray callback
+      if (capturedGen !== sessionGen) return; // stale session — new session started, ignore
       lLevelIdx++;
       if (lLevelIdx >= LEVELS_L.length) {
         stopListening();
@@ -2535,19 +2551,20 @@
       sessionLogStart = logLines.length; // snapshot index — count detections from here
       applyPreset(PRESETS[0]);
       showPresetSlot(0);
-      presetCycleTimer = setInterval(() => {
+      function tickPreset() {
         markPresetCompleted(presetCycleIdx); // current preset just finished — turn green
         presetCycleIdx++;
         if (presetCycleIdx >= PRESETS.length) {
-          clearInterval(presetCycleTimer);
           presetCycleTimer = null;
           stopListening();     // stops audio, calls renderCard(false) with current cardIndex
           onSessionComplete(); // override to celebration state
         } else {
           applyPreset(PRESETS[presetCycleIdx]);
           showPresetSlot(presetCycleIdx);
+          presetCycleTimer = setTimeout(tickPreset, PRESET_SLOT_SEC * 1000);
         }
-      }, PRESET_SLOT_SEC * 1000);
+      }
+      presetCycleTimer = setTimeout(tickPreset, PRESET_SLOT_SEC * 1000);
     }
 
     function onSessionComplete() {
@@ -2557,7 +2574,7 @@
       const detected  = sessionLines.filter(l => l.detected).length;
       const summary = document.createElement('div');
       summary.style.cssText = 'padding:3px 10px 5px;font-size:0.63rem;font-family:monospace;color:#4a4f62;';
-      summary.textContent = 'итог сессии: ' + detected + ' / ' + total + ' обнаружений';
+       summary.textContent = 'итог сессии: ' + detected + ' / ' + total + (currentTaskSet === 'l' ? ' уровней пройдено' : ' обнаружений');
       document.getElementById('log-list').appendChild(summary);
       document.getElementById('log-list').scrollTop = document.getElementById('log-list').scrollHeight;
       logLines.push({ ts: '──', text: 'SESSION TOTAL: ' + detected + '/' + total, detected: false });
@@ -2597,6 +2614,7 @@
           b.classList.remove('completed', 'active');
         });
         activePreset = null;
+        presetCycleIdx = 0;
         lLevelIdx = 0;
         lZoneStart = null;
         cardIndex = (cardIndex + 1) % MODES.length;
@@ -2688,13 +2706,14 @@
           gain.gain.linearRampToValueAtTime(0, st + 0.35);
           osc.start(st); osc.stop(st + 0.4);
         });
+        setTimeout(() => ac.close(), 1000);
       } catch(e) { /* AudioContext blocked — ignore */ }
     }
     // [END:JS-CELEBRATION-SOUND]
 
     function stopPresetCycle() {
       if (presetCycleTimer) {
-        clearInterval(presetCycleTimer);
+        clearTimeout(presetCycleTimer);
         presetCycleTimer = null;
       }
       const el = $('countdown');
@@ -2728,9 +2747,8 @@
       wavChunks = []; wavTotalSmp = 0; recStartTime = 0; recStopTime = 0; sessionStartTime = 0;
       const dlBtn = $('btn-download-audio');
       dlBtn.disabled = true;
-      dlBtn.style.cssText = 'padding:12px 32px;border-radius:12px;border:1px solid var(--border);' +
-        'background:var(--surface);color:var(--muted);font-size:0.95rem;font-weight:600;' +
-        'cursor:not-allowed;transition:all 0.2s;width:100%;max-width:340px;';
+      dlBtn.classList.remove('btn-download-enabled');
+      dlBtn.classList.add('btn-download-disabled');
     };
 
     $('btn-copy-log').onclick = () => {
@@ -2739,6 +2757,10 @@
       navigator.clipboard.writeText(text).then(() => {
         const btn = $('btn-copy-log');
         btn.textContent = 'Скопировано!';
+        setTimeout(() => btn.textContent = 'Копировать', 1500);
+      }).catch(() => {
+        const btn = $('btn-copy-log');
+        btn.textContent = 'Ошибка копирования';
         setTimeout(() => btn.textContent = 'Копировать', 1500);
       });
     };
@@ -2791,6 +2813,7 @@
           gain.gain.setValueAtTime(0.18, ac.currentTime);
           gain.gain.linearRampToValueAtTime(0, ac.currentTime + 0.18);
           osc.start(ac.currentTime); osc.stop(ac.currentTime + 0.2);
+          setTimeout(() => ac.close(), 500);
         } catch(e) { /* AudioContext blocked — ignore */ }
         // Show red message in log
         showEmptyGuardMessage();
@@ -2820,6 +2843,10 @@
     $('btn-copy-settings').onclick = function() {
       navigator.clipboard.writeText(settingsText()).then(() => {
         this.textContent = '✓ Скопировано!';
+        this.classList.add('ok');
+        setTimeout(() => { this.textContent = '📋 Копировать настройки'; this.classList.remove('ok'); }, 1500);
+      }).catch(() => {
+        this.textContent = 'Ошибка копирования';
         this.classList.add('ok');
         setTimeout(() => { this.textContent = '📋 Копировать настройки'; this.classList.remove('ok'); }, 1500);
       });
@@ -2886,6 +2913,7 @@
     // buildBars(): creates DOM rows once on first result.
     // renderResult(): updates bar widths and detection indicator each frame.
     let barFills = {}, barVals = {}, barsBuilt = false;
+    let labelCache = null; // FIX #37: cached label-to-object mapping from buildBars()
 
     function buildBars(results) {
       if (barsBuilt) return;
@@ -2895,13 +2923,32 @@
         const isR = r.label.toLowerCase() === 'р' || r.label.toLowerCase() === 'r';
         const row = document.createElement('div');
         row.className = 'bar-row';
-        row.innerHTML = `
-          <span class="bar-label">${r.label}</span>
-          <div class="bar-track"><div class="bar-fill ${isR ? 'r' : 'other'}" id="fill-${r.label}"></div></div>
-          <span class="bar-val" id="val-${r.label}">0%</span>`;
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'bar-label';
+        labelSpan.textContent = r.label;
+        const track = document.createElement('div');
+        track.className = 'bar-track';
+        const fill = document.createElement('div');
+        fill.className = 'bar-fill ' + (isR ? 'r' : 'other');
+        fill.id = 'fill-' + r.label;
+        track.appendChild(fill);
+        const valSpan = document.createElement('span');
+        valSpan.id = 'val-' + r.label;
+        valSpan.textContent = '0%';
+        row.appendChild(labelSpan);
+        row.appendChild(track);
+        row.appendChild(valSpan);
         barsEl.appendChild(row);
-        barFills[r.label] = document.getElementById('fill-' + r.label);
-        barVals[r.label]  = document.getElementById('val-'  + r.label);
+        barFills[r.label] = fill;
+        barVals[r.label]  = valSpan;
+      });
+      // FIX #37: cache label-to-object mapping so renderResult() can look up without .find()
+      labelCache = { r: null, noise: null, unknown: null };
+      results.forEach(r => {
+        const low = r.label.toLowerCase();
+        if (low === 'р' || low === 'r') labelCache.r = r;
+        else if (low === 'noise' || low === 'шум') labelCache.noise = r;
+        else if (low === 'unknown' || low === 'неизвестно') labelCache.unknown = r;
       });
     }
 
@@ -2909,9 +2956,10 @@
     function renderResult(res, peak) {
       buildBars(res.results);
       const s = getSettings();
-      const rClass = res.results.find(r => r.label.toLowerCase() === 'р' || r.label.toLowerCase() === 'r');
-      const noiseClass   = res.results.find(r => r.label.toLowerCase() === 'noise'   || r.label.toLowerCase() === 'шум');
-      const unknownClass = res.results.find(r => r.label.toLowerCase() === 'unknown' || r.label.toLowerCase() === 'неизвестно');
+      // FIX #37: use cached lookup instead of .find() — byte-for-byte identical output
+      const rClass       = labelCache.r;
+      const noiseClass   = labelCache.noise;
+      const unknownClass = labelCache.unknown;
 
       res.results.forEach(r => {
         if (barFills[r.label]) barFills[r.label].style.width = (r.value * 100) + '%';
@@ -2919,10 +2967,13 @@
       });
 
       const detected = rClass && rClass.value >= s.threshold;
-      indicator.className  = 'indicator ' + (detected ? 'detected' : 'noise');
-      indicator.textContent = detected ? 'Р' : '🎤';
-      labelMain.className  = 'label-main ' + (detected ? 'detected' : 'noise');
-      labelMain.textContent = detected ? 'Звук «Р» обнаружен!' : 'Шум / тишина';
+      // FIX #38: skip DOM updates for hidden elements (display:none)
+      if (indicator.offsetParent !== null) {
+        indicator.className  = 'indicator ' + (detected ? 'detected' : 'noise');
+        indicator.textContent = detected ? 'Р' : '🎤';
+        labelMain.className  = 'label-main ' + (detected ? 'detected' : 'noise');
+        labelMain.textContent = detected ? 'Звук «Р» обнаружен!' : 'Шум / тишина';
+      }
 
       // Log — timestamp is elapsed seconds from session start (matches audio position)
       const elapsed = (Date.now() - sessionStartTime) / 1000;
@@ -2949,6 +3000,10 @@
       if (fromRate === toRate) return input;
       const ratio = fromRate / toRate;
       const outLen = Math.ceil(input.length * (toRate / fromRate));
+      // Reuse resampleBuf across calls to avoid per-chunk allocation.
+      // Safe: the returned buffer is consumed synchronously — copied into the
+      // ring buffer and into a separate Float32Array for recording — before
+      // the next resample() call could overwrite it.
       if (!resampleBuf || resampleBuf.length !== outLen) {
         resampleBuf = new Float32Array(outLen);
       }
@@ -3003,9 +3058,8 @@
       // Enable download button (green) as soon as recording begins
       const dlBtn = $('btn-download-audio');
       dlBtn.disabled = false;
-      dlBtn.style.cssText = 'padding:12px 32px;border-radius:12px;border:2px solid #4fffb0;' +
-        'background:rgba(79,255,176,0.12);color:#4fffb0;font-size:0.95rem;font-weight:600;' +
-        'cursor:pointer;transition:all 0.2s;width:100%;max-width:340px;';
+      dlBtn.classList.remove('btn-download-disabled');
+      dlBtn.classList.add('btn-download-enabled');
     }
 
     function recStop() {
@@ -3051,13 +3105,9 @@
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000); // free blob memory after browser starts download
-      // Reset everything for next recording session
-      wavChunks = []; wavTotalSmp = 0; recStartTime = 0; recStopTime = 0; sessionStartTime = 0;
-      const dlBtn = $('btn-download-audio');
-      dlBtn.disabled = true;
-      dlBtn.style.cssText = 'padding:12px 32px;border-radius:12px;border:1px solid var(--border);' +
-        'background:var(--surface);color:var(--muted);font-size:0.95rem;font-weight:600;' +
-        'cursor:not-allowed;transition:all 0.2s;width:100%;max-width:340px;';
+      // Do NOT wipe wavChunks/wavTotalSmp — keep intact so user can re-download.
+      // Recording state is only cleared on new session start (recStart if recStartTime===0)
+      // or when the user clicks "Очистить" (btn-clear-log).
     }
 
     $('btn-download-audio').onclick = recDownloadWav;
@@ -3084,6 +3134,7 @@
       // Remove empty-guard message immediately when recording starts
       removeEmptyGuardMessage();
       isListening = true;
+      sessionGen++;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -3181,9 +3232,9 @@
        btnStart.style.display = 'none';
       btnStop.style.display  = 'inline-block';
       statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${window.MODEL_RATE} Гц, окно ${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} мс)`;
-      statusEl.className     = '';
-      renderCard(true);   // show card in recording state
-      if (currentTaskSet === 'l') {
+       statusEl.className     = '';
+       if (currentTaskSet !== 'l') renderCard(true);   // R mode only — L mode is rendered by startLevelCycle()
+       if (currentTaskSet === 'l') {
         startLevelCycle();
       } else {
         startPresetCycle(); // begin auto-cycling presets every PRESET_SLOT_SEC seconds
@@ -3225,6 +3276,7 @@
 
     btnStart.onclick = startListening;
     btnStop.onclick  = stopListening;
+    $('btn-back-to-profiles').onclick = goBackToLanding;
     // [END:JS-START-STOP]
 
     // Boot: show landing screen, AND start loading the model in parallel
