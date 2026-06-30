@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-27  v5.12 (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-30  v6.0 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -90,6 +90,20 @@
 ================================================================================
    CHANGELOG
 ================================================================================
+
+  v6.0 (2026-06-30)
+    - ADDED: User profile landing screen — grid of user cards shown before the app [TAG:HTML-LANDING] [TAG:CSS-LANDING] [TAG:JS-LANDING]
+    - ADDED: localStorage user persistence — completedCards stored per-user ID [TAG:JS-LANDING]
+    - ADDED: 3 demo users seeded on first load [TAG:JS-LANDING]
+    - ADDED: "New user" creation modal [TAG:HTML-CREATE-MODAL] [TAG:CSS-LANDING]
+    - ADDED: persistUserProgress() — called on session complete + on back-to-profiles [TAG:JS-LANDING]
+    - ADDED: "← Профили" back button in main panel [TAG:HTML-MAIN-PANEL]
+    - ADDED: app-screen wrapper div — wraps existing layout, hidden until profile selected [TAG:HTML-APP-SCREEN]
+    - CHANGED: selectUser() restores completedCards Sets and advances to first uncompleted card
+    - CHANGED: seedDemoUsersIfNeeded() runs on boot; classifier init deferred until user is selected
+    - CHANGED: MODEL_RATE/NUM_SAMPLES promoted to window scope (needed by deferred init)
+    - CHANGED: ringBuf creation deferred to initApp() (depends on NUM_SAMPLES)
+    - Update APP_VERSION to 'v6.0' [TAG:JS-VERSION]
 
   v5.12 (2026-06-27)
     - FIXED: CHANGELOG v5.8 typo — updateLevelAttempt →
@@ -426,6 +440,7 @@
 
   CSS
   ───
+  [TAG:CSS-LANDING]          Landing screen, user cards, modal, back button styles
   [TAG:CSS-VARIABLES]        Theme colors and design tokens (:root)
   [TAG:CSS-LAYOUT]           Body, .layout, panel sizing (two blocks: body + panels)
   [TAG:CSS-LOG-PANEL]        Left panel: log rows, colors, scroll, .panel-main
@@ -445,6 +460,9 @@
 
   HTML
   ────
+  [TAG:HTML-LANDING]         User profile landing screen — grid of profile cards
+  [TAG:HTML-CREATE-MODAL]    New user creation modal overlay
+  [TAG:HTML-APP-SCREEN]      Wrapper div for the entire app (hidden until profile selected)
   [TAG:HTML-LOG-PANEL]       Left column — inference log + copy/clear buttons (mode-grid removed v4.0)
   [TAG:HTML-LEFT-PANEL-LABELS] Section labels: «Выберите задание» / «История выполнения»
   [TAG:HTML-TASK-CARD]       Task card div in center panel — exercise per card/mode
@@ -454,6 +472,7 @@
 
   JAVASCRIPT
   ──────────
+  [TAG:JS-LANDING]           User profiles: localStorage, render, navigation, modal, back button
   [TAG:JS-RECORDER]          Raw WAV encoder (16-bit PCM 16kHz mono); download on click
   [TAG:JS-LEVEL-CYCLE]       L task-set only: 3-level volume-gated recording loop (тихо/средне/громко)
   [TAG:JS-CARD-CYCLE]        Task card display + preset auto-cycle (3 sec/preset); replaces JS-AUTOSTOP
@@ -657,7 +676,8 @@
   [ ] [TAG:] added to index if new section was created
   [ ] CHANGELOG updated with version bump
   [ ] KNOWN CONSTRAINTS updated if something was reverted
-  [ ] No stats table, no localStorage, no external API calls
+  [ ] No stats table, no external API calls
+  [ ] localStorage is used ONLY for user profiles (rph_users, rph_user_*)
 
 ================================================================================
   HOW TO READ USER LOGS
@@ -1150,9 +1170,160 @@
     }
     /* [END:CSS-LEVEL-BADGES] */
     /* [END:CSS-TASK-CARD] */
+
+    /* [TAG:CSS-LANDING] Landing screen + modal + back button */
+    #landing-screen {
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; padding: 48px 24px 64px;
+      background: var(--bg);
+    }
+    .landing-header { text-align: center; margin-bottom: 40px; }
+    .landing-subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 8px; }
+
+    .user-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
+      width: 100%; max-width: 860px;
+    }
+
+    .user-card-new {
+      border: 2px dashed var(--border); border-radius: 16px;
+      background: transparent; color: var(--muted);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 10px; min-height: 180px;
+      cursor: pointer; transition: border-color 0.2s, color 0.2s;
+      font-size: 0.85rem; font-weight: 600;
+    }
+    .user-card-new:hover { border-color: var(--r-color); color: var(--r-color); }
+    .user-card-new-icon { font-size: 2.2rem; }
+
+    .user-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 20px 18px;
+      cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .user-card:hover {
+      border-color: rgba(79,255,176,0.5);
+      box-shadow: 0 0 20px rgba(79,255,176,0.1);
+    }
+    .user-card-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+    }
+    .user-card-name { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+    .user-card-age {
+      font-size: 0.72rem; font-weight: 600; color: var(--muted);
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 20px; padding: 2px 9px;
+    }
+    .user-card-last {
+      font-size: 0.7rem; color: var(--muted);
+    }
+    .user-card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .user-card-tag {
+      font-size: 0.68rem; font-weight: 700;
+      padding: 3px 9px; border-radius: 20px;
+      border: 1px solid;
+    }
+    .user-card-tag.r-done {
+      color: var(--r-color); border-color: rgba(79,255,176,0.4);
+      background: rgba(79,255,176,0.08);
+    }
+    .user-card-tag.l-done {
+      color: var(--accent); border-color: rgba(123,97,255,0.4);
+      background: rgba(123,97,255,0.08);
+    }
+    .user-card-tag.in-progress {
+      color: var(--muted); border-color: var(--border); background: transparent;
+    }
+    .user-card-progress {
+      font-size: 0.72rem; color: var(--muted);
+    }
+    .user-card-progress strong { color: var(--text); }
+
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      display: flex; align-items: center; justify-content: center; z-index: 1000;
+      backdrop-filter: blur(4px);
+    }
+    .modal-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 18px; padding: 28px 24px;
+      width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 16px;
+    }
+    .modal-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+    .modal-field { display: flex; flex-direction: column; gap: 6px; }
+    .modal-field label { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    .modal-field input {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+      padding: 10px 12px; color: var(--text); font-size: 0.9rem; font-family: 'Inter', sans-serif;
+      outline: none; transition: border-color 0.15s;
+    }
+    .modal-field input:focus { border-color: var(--r-color); }
+    .modal-actions { display: flex; gap: 10px; margin-top: 4px; }
+    .modal-btn-primary {
+      flex: 1; padding: 11px; border-radius: 10px; border: none;
+      background: var(--r-color); color: #0a1a13; font-weight: 700;
+      font-size: 0.9rem; cursor: pointer;
+    }
+    .modal-btn-secondary {
+      padding: 11px 18px; border-radius: 10px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-weight: 600;
+      font-size: 0.9rem; cursor: pointer;
+    }
+
+    .btn-back {
+      align-self: flex-start; padding: 7px 14px; border-radius: 8px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--muted); font-size: 0.78rem; font-weight: 600;
+      cursor: pointer; margin-bottom: 4px; margin-top: -8px;
+      transition: color 0.15s, border-color 0.15s;
+      font-family: 'Inter', sans-serif;
+    }
+    .btn-back:hover { color: var(--text); border-color: var(--muted); }
+    /* [END:CSS-LANDING] */
   </style>
 </head>
 <body>
+  <!-- [TAG:HTML-LANDING] User profile landing screen -->
+  <div id="landing-screen">
+    <div class="landing-header">
+      <h1>Детектор <span>«Р»</span></h1>
+      <p class="landing-subtitle">Выберите профиль или создайте новый</p>
+    </div>
+    <div id="user-grid" class="user-grid">
+    </div>
+  </div>
+  <!-- [END:HTML-LANDING] -->
+
+  <!-- [TAG:HTML-CREATE-MODAL] New user creation modal -->
+  <div id="create-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <div class="modal-title">Новый пользователь</div>
+      <div class="modal-field">
+        <label>Имя</label>
+        <input id="modal-name" type="text" placeholder="Например: Миша" maxlength="32">
+      </div>
+      <div class="modal-field">
+        <label>Фамилия</label>
+        <input id="modal-surname" type="text" placeholder="Необязательно" maxlength="32">
+      </div>
+      <div class="modal-field">
+        <label>Возраст</label>
+        <input id="modal-age" type="number" min="2" max="18" placeholder="лет">
+      </div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="modal-btn-secondary">Отмена</button>
+        <button id="modal-create" class="modal-btn-primary">Создать</button>
+      </div>
+    </div>
+  </div>
+  <!-- [END:HTML-CREATE-MODAL] -->
+
+  <!-- [TAG:HTML-APP-SCREEN] Wrapper for the entire app (hidden until profile selected) -->
+  <div id="app-screen" style="display:none; flex:1; flex-direction:column; min-height:100vh;">
   <div class="layout">
 
     <!-- [TAG:HTML-LOG-PANEL] ──────────────────────────────────── -->
@@ -1181,6 +1352,7 @@
 
     <!-- [TAG:HTML-MAIN-PANEL] ─────────────────────────────────── -->
     <div class="panel-main">
+      <button id="btn-back-to-profiles" class="btn-back" onclick="goBackToLanding()">← Профили</button>
       <!-- [TAG:HTML-TASK-CARD] Task card: shows current exercise -->
       <div class="task-card" id="task-card">
         <div class="task-card-number" id="card-number">Задание 1 из 6</div>
@@ -1307,6 +1479,8 @@
     </div>
   </div>
   <!-- [END:HTML-SETTINGS-PANEL] -->
+  </div>
+  <!-- [END:HTML-APP-SCREEN] -->
 
   <!-- [TAG:JS-CLASSIFIER] ─────────────────────────────────────────────────
     EdgeImpulseClassifier: wraps the WASM module.
@@ -1398,8 +1572,195 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v5.12';
+    const APP_VERSION = 'v6.0';
     // [END:JS-VERSION]
+
+    // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
+    // User profile landing screen: storage, render, navigation.
+    // All persistence via localStorage. No server required.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const STORAGE_KEY_USERS = 'rph_users';
+    const STORAGE_PREFIX_USER = 'rph_user_';
+
+    const DEMO_USERS = [
+      {
+        id: "user_demo_1",
+        name: "Миша",
+        surname: "Соколов",
+        age: 6,
+        createdAt: "2026-05-10T09:00:00Z",
+        lastSessionAt: "2026-06-28T14:30:00Z",
+        completedCards: { r: [0, 1, 2], l: [0, 1] }
+      },
+      {
+        id: "user_demo_2",
+        name: "Соня",
+        surname: "Белова",
+        age: 5,
+        createdAt: "2026-05-18T10:00:00Z",
+        lastSessionAt: "2026-06-25T11:00:00Z",
+        completedCards: { r: [0, 1, 2, 3, 4, 5], l: [0, 1, 2, 3, 4] }
+      },
+      {
+        id: "user_demo_3",
+        name: "Артём",
+        surname: "Дронов",
+        age: 7,
+        createdAt: "2026-06-01T08:00:00Z",
+        lastSessionAt: "2026-06-29T16:00:00Z",
+        completedCards: { r: [0], l: [] }
+      }
+    ];
+
+    let activeUser = null;
+
+    function getAllUsers() {
+      try {
+        const ids = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+        return ids.map(id => {
+          try { return JSON.parse(localStorage.getItem(STORAGE_PREFIX_USER + id)); }
+          catch { return null; }
+        }).filter(Boolean);
+      } catch { return []; }
+    }
+
+    function saveUser(user) {
+      const ids = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+      if (!ids.includes(user.id)) {
+        ids.push(user.id);
+        localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(ids));
+      }
+      localStorage.setItem(STORAGE_PREFIX_USER + user.id, JSON.stringify(user));
+    }
+
+    function seedDemoUsersIfNeeded() {
+      if (localStorage.getItem(STORAGE_KEY_USERS) !== null) return;
+      DEMO_USERS.forEach(saveUser);
+    }
+
+    function formatLastSession(isoDate) {
+      if (!isoDate) return 'Сессий не было';
+      const d = new Date(isoDate);
+      return 'Последняя: ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+    }
+
+    function renderLanding() {
+      const grid = document.getElementById('user-grid');
+      const users = getAllUsers();
+      grid.innerHTML = '';
+
+      const newCard = document.createElement('div');
+      newCard.className = 'user-card-new';
+      newCard.innerHTML = '<div class="user-card-new-icon">＋</div><span>Новый пользователь</span>';
+      newCard.addEventListener('click', openCreateModal);
+      grid.appendChild(newCard);
+
+      users.forEach(user => {
+        const rDone = (user.completedCards?.r || []).length;
+        const lDone = (user.completedCards?.l || []).length;
+        const rTotal = MODES_R ? MODES_R.length : 6;
+        const lTotal = MODES_L ? MODES_L.length : 10;
+        const rComplete = rDone >= rTotal;
+        const lComplete = lDone >= lTotal;
+
+        const card = document.createElement('div');
+        card.className = 'user-card';
+        card.innerHTML = `
+          <div class="user-card-header">
+            <div class="user-card-name">${user.name}${user.surname ? ' ' + user.surname : ''}</div>
+            <div class="user-card-age">${user.age} лет</div>
+          </div>
+          <div class="user-card-last">${formatLastSession(user.lastSessionAt)}</div>
+          <div class="user-card-progress">
+            Правильное Р: <strong>${rDone}/${rTotal}</strong> ·
+            Замена Р→Л: <strong>${lDone}/${lTotal}</strong>
+          </div>
+          <div class="user-card-tags">
+            ${rComplete
+              ? '<span class="user-card-tag r-done">✓ Р завершён</span>'
+              : '<span class="user-card-tag in-progress">Р: ' + rDone + '/' + rTotal + '</span>'}
+            ${lComplete
+              ? '<span class="user-card-tag l-done">✓ Л завершён</span>'
+              : '<span class="user-card-tag in-progress">Л: ' + lDone + '/' + lTotal + '</span>'}
+          </div>
+        `;
+        card.addEventListener('click', () => selectUser(user));
+        grid.appendChild(card);
+      });
+    }
+
+    function selectUser(user) {
+      activeUser = user;
+
+      completedCards.r = new Set(user.completedCards?.r || []);
+      completedCards.l = new Set(user.completedCards?.l || []);
+
+      const firstUnfinishedR = [0,1,2,3,4,5].find(i => !completedCards.r.has(i)) ?? 0;
+      const firstUnfinishedL = [0,1,2,3,4,5,6,7,8,9].find(i => !completedCards.l.has(i)) ?? 0;
+      cardIndex = (currentTaskSet === 'r') ? firstUnfinishedR : firstUnfinishedL;
+
+      document.getElementById('landing-screen').style.display = 'none';
+      document.getElementById('app-screen').style.display = 'flex';
+
+      if (!classifierInitialized) {
+        initApp();
+      } else {
+        renderCard(false);
+        renderCardNav();
+      }
+    }
+
+    function persistUserProgress() {
+      if (!activeUser) return;
+      activeUser.completedCards = {
+        r: [...completedCards.r],
+        l: [...completedCards.l]
+      };
+      activeUser.lastSessionAt = new Date().toISOString();
+      saveUser(activeUser);
+    }
+
+    function openCreateModal() {
+      document.getElementById('modal-name').value = '';
+      document.getElementById('modal-surname').value = '';
+      document.getElementById('modal-age').value = '';
+      document.getElementById('create-modal').style.display = 'flex';
+      document.getElementById('modal-name').focus();
+    }
+
+    function closeCreateModal() {
+      document.getElementById('create-modal').style.display = 'none';
+    }
+
+    document.getElementById('modal-cancel').addEventListener('click', closeCreateModal);
+
+    document.getElementById('modal-create').addEventListener('click', () => {
+      const name = document.getElementById('modal-name').value.trim();
+      const surname = document.getElementById('modal-surname').value.trim();
+      const age = parseInt(document.getElementById('modal-age').value, 10);
+      if (!name) { document.getElementById('modal-name').focus(); return; }
+      const newUser = {
+        id: 'user_' + Date.now(),
+        name, surname, age: isNaN(age) ? null : age,
+        createdAt: new Date().toISOString(),
+        lastSessionAt: null,
+        completedCards: { r: [], l: [] }
+      };
+      saveUser(newUser);
+      closeCreateModal();
+      selectUser(newUser);
+    });
+
+    window.goBackToLanding = function() {
+      persistUserProgress();
+      if (isListening) stopListening();
+      document.getElementById('app-screen').style.display = 'none';
+      document.getElementById('landing-screen').style.display = 'flex';
+      renderLanding();
+    };
+
+    // [END:JS-LANDING]
     let isListening = false;  // declared early — switchTaskSet reads it before JS-AUDIO
     let confettiActive = false;
     const statusEl  = $('status');
@@ -2038,6 +2399,7 @@
       // Mark this card as completed in the nav
       completedCards[currentTaskSet].add(cardIndex);
       if (currentTaskSet === 'l') renderCardNav();
+      persistUserProgress();
       // Card turns fully green
       $('task-card').classList.add('completed');
       $('card-footer').textContent = '🎉 Задание выполнено!';
@@ -2303,24 +2665,30 @@
     // [TAG:JS-MODEL-INIT] ──────────────────────────────────────────────────
     // Initializes EdgeImpulseClassifier, reads MODEL_RATE and NUM_SAMPLES
     // from model properties. Displays in #debug-info.
+    // Deferred until user selects a profile (called from initApp()).
     let classifier;
-    try {
-      classifier = new EdgeImpulseClassifier();
-      await classifier.init();
-    } catch (e) {
-      statusEl.textContent = 'Ошибка модели: ' + e;
-      statusEl.className = 'error';
-      return;
+
+    async function initApp() {
+      try {
+        classifier = new EdgeImpulseClassifier();
+        await classifier.init();
+      } catch (e) {
+        statusEl.textContent = 'Ошибка модели: ' + e;
+        statusEl.className = 'error';
+        return;
+      }
+
+      const props       = classifier.getProperties();
+      window.MODEL_RATE  = props.frequency || 16000;
+      window.NUM_SAMPLES = props.frame_sample_count || 16000;
+
+      ringBuf = new Float32Array(window.NUM_SAMPLES);
+
+      debugInfoEl.textContent = `freq=${window.MODEL_RATE} Hz | window=${window.NUM_SAMPLES} samples (${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} ms)`;
+      debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
+      statusEl.textContent = 'Модель готова.';
+      renderCard(false);
     }
-
-    const props       = classifier.getProperties();
-    const MODEL_RATE  = props.frequency || 16000;
-    const NUM_SAMPLES = props.frame_sample_count || 16000;
-
-    debugInfoEl.textContent = `freq=${MODEL_RATE} Hz | window=${NUM_SAMPLES} samples (${(NUM_SAMPLES/MODEL_RATE*1000).toFixed(0)} ms)`;
-    debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
-    statusEl.textContent = 'Модель готова.';
-    renderCard(false); // show first task card
 
     // [END:JS-MODEL-INIT]
 
@@ -2410,7 +2778,7 @@
     // getUserMedia: echoCancellation/noiseSuppression/autoGainControl all FALSE.
     // ScriptProcessorNode bufferSize=4096. Deprecated but functional in Chrome.
     let audioCtx, sourceNode, processorNode, stream, inferenceTimer;
-    const ringBuf = new Float32Array(NUM_SAMPLES);
+    let ringBuf; // deferred: created in initApp() after NUM_SAMPLES is known
     let ringPos = 0, totalSamples = 0;
     let sessionStartTime = 0; // set when recording starts; used for log timestamps
     isListening = false;  // reset — declared at top of IIFE
@@ -2465,7 +2833,7 @@
       // Encode all accumulated chunks to 16-bit mono PCM WAV
       const buf  = new ArrayBuffer(44 + wavTotalSmp * 2);
       const view = new DataView(buf);
-      const SR   = MODEL_RATE;
+      const SR   = window.MODEL_RATE;
       const ws   = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
       ws(0,  'RIFF');  view.setUint32(4,  36 + wavTotalSmp * 2, true);
       ws(8,  'WAVE');  ws(12, 'fmt ');
@@ -2528,7 +2896,7 @@
         return;
       }
 
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: MODEL_RATE });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: window.MODEL_RATE });
       const nativeRate = audioCtx.sampleRate;
 
       recStart();  // sets sessionStartTime, inserts gap-silence if resuming after Stop
@@ -2544,12 +2912,12 @@
         micLevel.style.width = micPercent + '%';
         if (currentTaskSet === 'l' && isListening) updateLevelMonitor(micPercent);
 
-        const samples = nativeRate === MODEL_RATE ? raw : resample(raw, nativeRate, MODEL_RATE);
+        const samples = nativeRate === window.MODEL_RATE ? raw : resample(raw, nativeRate, window.MODEL_RATE);
         // [TAG:JS-RINGBUFFER] ────────────────────────────────────────────────
         // Write resampled samples into circular ring buffer (16000 samples = 1s window).
         for (let i = 0; i < samples.length; i++) {
           ringBuf[ringPos] = samples[i];
-          ringPos = (ringPos + 1) % NUM_SAMPLES;
+          ringPos = (ringPos + 1) % window.NUM_SAMPLES;
           totalSamples++;
         }
         // [END:JS-RINGBUFFER]
@@ -2566,10 +2934,10 @@
         const s = getSettings();
         const ms = s.interval;
         inferenceTimer = setTimeout(() => {
-        if (totalSamples >= NUM_SAMPLES) {
+        if (totalSamples >= window.NUM_SAMPLES) {
             const cfg = getSettings();
-            const win = new Float32Array(NUM_SAMPLES);
-            for (let i = 0; i < NUM_SAMPLES; i++) {
+            const win = new Float32Array(window.NUM_SAMPLES);
+            for (let i = 0; i < window.NUM_SAMPLES; i++) {
               win[i] = ringBuf[(ringPos + i) % NUM_SAMPLES] * cfg.scale;
             }
 
@@ -2601,7 +2969,7 @@
 
        btnStart.style.display = 'none';
       btnStop.style.display  = 'inline-block';
-      statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${MODEL_RATE} Гц, окно ${(NUM_SAMPLES/MODEL_RATE*1000).toFixed(0)} мс)`;
+      statusEl.textContent   = `Слушаю… (${nativeRate} Гц → ${window.MODEL_RATE} Гц, окно ${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} мс)`;
       statusEl.className     = '';
       renderCard(true);   // show card in recording state
       if (currentTaskSet === 'l') {
@@ -2647,6 +3015,10 @@
     btnStart.onclick = startListening;
     btnStop.onclick  = stopListening;
     // [END:JS-START-STOP]
+
+    // Boot: show landing screen (defer classifier init until user selects a profile)
+    seedDemoUsersIfNeeded();
+    renderLanding();
   })();
   </script>
 </body>
