@@ -3,7 +3,7 @@
 <!--
 ================================================================================
   R-DETECTOR  |  DEVELOPER DOCUMENTATION & CODE INDEX
-  Last updated: 2026-06-30  v6.1 (see APP_VERSION in [TAG:JS-VERSION])
+  Last updated: 2026-06-30  v6.1.1 (see APP_VERSION in [TAG:JS-VERSION])
 ================================================================================
 
   HOW TO NAVIGATE THIS FILE
@@ -91,7 +91,11 @@
    CHANGELOG
 ================================================================================
 
-  v6.1 (2026-06-30)
+   v6.1.1 (2026-06-30)
+     - FIXED: profile selection now opens first uncompleted card instead of always card 0 [TAG:JS-LANDING] [TAG:JS-MODEL-INIT]
+     - Update APP_VERSION to 'v6.1.1' [TAG:JS-VERSION]
+
+   v6.1 (2026-06-30)
     - CHANGED: L progress tags on user cards: "Л: N/10" → "Р→Л: N/10" [TAG:JS-LANDING]
     - CHANGED: "✓ Л завершён" → "✓ Р→Л завершён" [TAG:JS-LANDING]
     - ADDED: task-set-btn turns green when all cards in a set are completed [TAG:CSS-LANDING] [TAG:JS-LANDING]
@@ -1599,7 +1603,7 @@
   (async () => {
     const $ = id => document.getElementById(id);
     // [TAG:JS-VERSION] Single source of truth for app version number
-    const APP_VERSION = 'v6.1';
+    const APP_VERSION = 'v6.1.1';
     // [END:JS-VERSION]
 
     // [TAG:JS-LANDING] ─────────────────────────────────────────────────────────
@@ -2757,14 +2761,17 @@
       window.MODEL_RATE  = props.frequency || 16000;
       window.NUM_SAMPLES = props.frame_sample_count || 16000;
 
-      ringBuf = new Float32Array(window.NUM_SAMPLES);
+       ringBuf = new Float32Array(window.NUM_SAMPLES);
 
-      debugInfoEl.textContent = `freq=${window.MODEL_RATE} Hz | window=${window.NUM_SAMPLES} samples (${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} ms)`;
-      debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
-      statusEl.textContent = 'Модель готова.';
-      renderCard(false);
-      renderCardNav();
-      updateTaskSetBtnCompletion();
+       debugInfoEl.textContent = `freq=${window.MODEL_RATE} Hz | window=${window.NUM_SAMPLES} samples (${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} ms)`;
+       debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
+       statusEl.textContent = 'Модель готова.';
+       const firstUnfinishedR = [0,1,2,3,4,5].find(i => !completedCards.r.has(i)) ?? 0;
+       const firstUnfinishedL = [0,1,2,3,4,5,6,7,8,9].find(i => !completedCards.l.has(i)) ?? 0;
+       cardIndex = (currentTaskSet === 'r') ? firstUnfinishedR : firstUnfinishedL;
+       renderCard(false);
+       renderCardNav();
+       updateTaskSetBtnCompletion();
     }
 
     // [END:JS-MODEL-INIT]
