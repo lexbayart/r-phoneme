@@ -1136,6 +1136,72 @@
     #status.error { color: var(--noise-color); }
     #debug-info { font-size: 0.65rem; color: #3a3d4a; font-family: monospace; text-align: center; }
 
+    /* [TAG:CSS-DIAG] Readiness indicator + diagnostics panel */
+    .download-indicator {
+      font-size: 0.78rem;
+      text-align: center;
+      margin-top: 6px;
+      min-height: 1.1em;
+      line-height: 1.4;
+    }
+    .download-indicator.ok    { color: var(--r-color); }
+    .download-indicator.warn  { color: #e0b23a; }
+
+    .btn-diag-toggle {
+      display: block;
+      margin: 10px auto 0;
+      font-size: 0.78rem;
+      font-weight: 600;
+      background: #f5c518;
+      color: #1a1a1a;
+      border: 1px solid #cba000;
+      border-radius: 6px;
+      padding: 6px 14px;
+      cursor: pointer;
+    }
+    .btn-diag-toggle:hover { background: #ffd633; }
+    .btn-diag-toggle:focus,
+    .btn-diag-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .diag-panel {
+      margin: 8px auto 0;
+      max-width: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .diag-panel textarea {
+      width: 100%;
+      height: 140px;
+      box-sizing: border-box;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      font-family: 'SFMono-Regular', Consolas, monospace;
+      font-size: 0.68rem;
+      line-height: 1.4;
+      resize: vertical;
+    }
+    .diag-panel textarea:focus { outline: none; border-color: var(--accent); }
+    .diag-panel button {
+      align-self: flex-end;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .diag-panel button:hover { opacity: 0.85; }
+
     /* ── Правая панель: настройки ── */
     /* [END:CSS-STATUS] */
 
@@ -1721,6 +1787,12 @@
       <button id="btn-download-audio" disabled class="btn-download-disabled">
         ⬇ Скачать аудиозапись
       </button>
+      <div id="download-indicator" class="download-indicator"></div>
+      <button id="btn-diag-toggle" class="btn-diag-toggle">🩺 Диагностика</button>
+      <div id="diag-panel" class="diag-panel" style="display:none">
+        <textarea id="diag-text" readonly></textarea>
+        <button id="btn-diag-copy">📋 Скопировать лог</button>
+      </div>
 
       <div id="status">Загрузка модели…</div>
       <div id="debug-info"></div>
@@ -1892,6 +1964,82 @@
   <script>
   (async () => {
     const $ = id => document.getElementById(id);
+
+    // [TAG:JS-DIAG] ────────────────────────────────────────────────────────
+    // Lightweight diagnostics log. Collects environment info + errors so the
+    // user can copy/paste it when reporting a problem (e.g. audio download
+    // failing on another machine/connection). Not sent anywhere automatically.
+    //
+    // DIAG_BUILD identifies which version of THIS diagnostics system produced
+    // the log — independent of APP_VERSION (which tracks the app itself).
+    // Bump it whenever the diagnostics code changes, so that a pasted log can
+    // be understood on its own, in a brand-new chat with zero prior context:
+    // it tells you which fields/format to expect below.
+    const DIAG_BUILD = 'diag-v2 (2026-07-01: raw step trace + global error catcher)';
+    const diagLog = [];
+    function diagPush(msg) {
+      const t = new Date().toISOString().slice(11, 19);
+      diagLog.push(`[${t}] ${msg}`);
+      if (diagLog.length > 400) diagLog.shift(); // cap size
+    }
+    // Catches anything NOT already wrapped in a try/catch elsewhere in the app —
+    // this is the safety net for "ни одна из проверок не сработала" cases: even
+    // if none of the known checks (model/mic/HTTPS/etc.) explain a failure, a
+    // genuine JS crash anywhere on the page will still land here with a stack.
+    window.addEventListener('error', (ev) => {
+      diagPush(`НЕПЕРЕХВАЧЕННАЯ ОШИБКА: ${ev.message} (${ev.filename}:${ev.lineno}:${ev.colno})` +
+                (ev.error && ev.error.stack ? '\n  stack: ' + ev.error.stack : ''));
+    });
+    window.addEventListener('unhandledrejection', (ev) => {
+      const r = ev.reason;
+      diagPush('НЕПЕРЕХВАЧЕННЫЙ ОТКАЗ ПРОМИСА: ' + (r && r.stack ? r.stack : String(r)));
+    });
+    // Environment capability checks — anything false here explains a download
+    // failure that has nothing to do with the model (permissions, old browser,
+    // non-HTTPS page, etc.)
+    const envCheck = {
+      secureContext: window.isSecureContext,
+      getUserMedia:  !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+      blobDownload:  ('download' in document.createElement('a')) && !!window.Blob && !!window.URL,
+    };
+    let micError = null;     // last getUserMedia error name, e.g. 'NotAllowedError' — cleared on success
+    let micErrorText = '';   // human-readable version of micError, shown in the indicator
+    let tabHiddenDuringRec = false; // set if the tab was backgrounded while recording — some
+                                     // mobile browsers pause the mic/AudioContext silently
+    function micErrorMessage(e) {
+      switch (e.name) {
+        case 'NotAllowedError':
+        case 'PermissionDeniedError':
+          return 'доступ к микрофону запрещён — разрешите его в настройках сайта в браузере и обновите страницу';
+        case 'NotFoundError':
+        case 'DevicesNotFoundError':
+          return 'микрофон не найден — проверьте, что он подключён и не отключён в системе';
+        case 'NotReadableError':
+        case 'TrackStartError':
+          return 'микрофон занят другой программой (Zoom, Skype, звонок и т.п.) — закройте её и попробуйте снова';
+        case 'OverconstrainedError':
+          return 'микрофон не поддерживает нужные настройки записи';
+        case 'SecurityError':
+          return 'доступ заблокирован настройками безопасности браузера/системы';
+        case 'AbortError':
+          return 'запрос на доступ к микрофону был прерван — попробуйте ещё раз';
+        default:
+          return `${e.name || 'неизвестная ошибка'}: ${e.message || ''}`;
+      }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && typeof isListening !== 'undefined' && isListening) {
+        tabHiddenDuringRec = true;
+        diagPush('ПРЕДУПРЕЖДЕНИЕ: вкладка свёрнута/скрыта во время записи — на некоторых устройствах это может остановить запись без ошибки');
+      }
+    });
+    diagPush(`DIAG_BUILD: ${DIAG_BUILD}`);
+    diagPush(`UA: ${navigator.userAgent}`);
+    diagPush(`Secure context: ${envCheck.secureContext}`);
+    diagPush(`getUserMedia supported: ${envCheck.getUserMedia}`);
+    diagPush(`Blob-скачивание поддерживается: ${envCheck.blobDownload}`);
+    // [END:JS-DIAG]
+
     // [TAG:JS-VERSION] Single source of truth for app version number
       const APP_VERSION = 'v6.10.1';
     // [END:JS-VERSION]
@@ -2569,17 +2717,37 @@
     // NOT the pass/fail silence threshold — that is WHISPER_THRESHOLD (0.5%).
     // If micPercent < NOISE_FLOOR, the meter fill shows no color (empty bar).
     const NOISE_FLOOR = 1.5;
+    // [TAG:JS-AMBIENT-CALIBRATION] ───────────────────────────────────────────
+    // Defence against constant mechanical background noise (fan, AC, etc.)
+    // being misread as a valid "Тихо" attempt. Absolute thresholds alone
+    // can't tell a quiet fan hum apart from a quiet whisper if both sit at
+    // the same micPercent — so at the start of every L-card's level cycle we
+    // measure AMBIENT_CALIBRATION_MS of "background" (whatever the mic picks
+    // up before the person starts actively speaking) and require any level-0
+    // "ok" reading to clear that measured floor by AMBIENT_MARGIN, not just
+    // clear the fixed WHISPER_THRESHOLD. A steady fan gets baked into
+    // ambientLevel and therefore can no longer pass "Тихо" on its own.
+    const AMBIENT_CALIBRATION_MS = 900; // how long to sample background before gating starts
+    const AMBIENT_MARGIN         = 1.0; // required rise (in micPercent points) above measured background
+    // [END:JS-AMBIENT-CALIBRATION]
     const LEVELS_L = [
       { key: 'quiet',  label: 'Тихо',   sizeClass: 'lvl-small',  max: 8,
-        loudMsg:    'Слишком громко — говорите тише, почти шёпотом 🤫',
-        silenceMsg: 'Скажите слог — пусть что-то будет слышно…' },
+        loudMsg:  '🤫 Тише',
+        quietMsg: '📢 Громче' },
       { key: 'medium', label: 'Средне', sizeClass: 'lvl-medium', /* bounds from neighbours */
-        loudMsg:  'Чуть тише — это должен быть обычный разговорный голос',
-        quietMsg: 'Чуть громче — обычным разговорным голосом' },
+        loudMsg:  '🤫 Тише',
+        quietMsg: '📢 Громче' },
       { key: 'loud',   label: 'Громко', sizeClass: 'lvl-large',  min: 18,
-        quietMsg: 'Громче — пусть слог прозвучит уверенно 📢' },
+        quietMsg: '📢 Громче' },
     ];
-    const ZONE_HOLD_MS = 180; // min continuous in-zone time (v6.10.1 — restored small debounce: at 0ms a single transient spike right after a quieter level instantly satisfied the next level, e.g. a sudden loud sound immediately after "тихо" would instantly pass "средне". 180ms is short enough not to feel laggy for a syllable, but long enough that a single stray frame can't trigger a pass.
+    const ZONE_HOLD_MS = 0; // v6.11 — was 180ms, but the onaudioprocess callback only fires
+    // every ~256ms (4096 samples @ 16kHz), so any hold >0 silently required at least
+    // 2 consecutive in-zone callbacks (~256-500ms) to register — longer than a short
+    // sound like a single "Р" can sustain. The original 180ms existed to stop a
+    // transient spike right after leaving one zone from instantly satisfying the
+    // next; that's now handled by the message-honesty fix above (JS-ZONE-HOLD /
+    // JS-FEEDBACK-HOLD): a pass is only ever reported — and only ever advances the
+    // level — the instant a genuine in-zone reading occurs, no silent extra wait.
     const WHISPER_THRESHOLD = 0.5; // mic% below this = silence, not a valid Тихо attempt
     // [END:JS-LEVEL-CYCLE-DATA]
 
@@ -2607,6 +2775,7 @@
         logLines: [], wavChunks: [], wavTotalSmp: 0,
         recStartTime: 0, recStopTime: 0, sessionStartTime: 0, sessionLogStart: 0,
         lastCardCompletedAt: 0, // wall-clock ms of the last card finished in this task-set (0 = none yet)
+        tabHiddenDuringRec: false, // per-task-set — recording integrity warning must not leak across sets
       };
     }
     const sessionStore = {
@@ -2644,7 +2813,7 @@
       sessionStore[set] = {
         logLines, wavChunks, wavTotalSmp,
         recStartTime, recStopTime, sessionStartTime, sessionLogStart,
-        lastCardCompletedAt,
+        lastCardCompletedAt, tabHiddenDuringRec,
       };
     }
 
@@ -2660,6 +2829,7 @@
       sessionStartTime = st.sessionStartTime;
       sessionLogStart  = st.sessionLogStart;
       lastCardCompletedAt = st.lastCardCompletedAt || 0;
+      tabHiddenDuringRec  = !!st.tabHiddenDuringRec;
       renderLogList();
       const dlBtn = $('btn-download-audio');
       if (wavTotalSmp > 0) {
@@ -2671,6 +2841,8 @@
         dlBtn.classList.remove('btn-download-enabled');
         dlBtn.classList.add('btn-download-disabled');
       }
+      updateDownloadIndicator(); // keep indicator text in sync — otherwise it can still
+                                  // show the previous task-set's status after switching
     }
     // [END:JS-SESSION-STORE]
 
@@ -2719,7 +2891,26 @@
 
     let currentTaskSet = 'r';
     let lLevelIdx = 0;       // current LEVELS_L index (0..2) for the active L card
+    // [TAG:JS-LEVEL-LOCKOUT-STATE] see [TAG:JS-LEVEL-LOCKOUT] below
+    let levelStartedAt = 0;         // Date.now() when the current level (lLevelIdx) began
+    const LEVEL_LOCKOUT_MS = 300;   // passes are ignored for this long right after a level starts
+    // [TAG:JS-LEVEL-RELEASE-STATE] see [TAG:JS-LEVEL-RELEASE] below
+    let needsRelease = false; // true = must hear silence before the next pass can register
+    // [END:JS-LEVEL-RELEASE-STATE]
+    // [END:JS-LEVEL-LOCKOUT-STATE]
     let lZoneStart = null;   // Date.now() timestamp when mic entered the target zone (null = not in zone)
+    // [TAG:JS-AMBIENT-CALIBRATION-STATE] see [TAG:JS-AMBIENT-CALIBRATION] above
+    let ambientLevel  = 0;       // measured background micPercent (fan/AC/etc.), reset per level-cycle start
+    let isCalibrating = false;   // true while sampling background at the start of a level cycle
+    let calibSamples  = [];      // micPercent samples collected during the calibration window
+    let calibStartAt  = 0;       // Date.now() when calibration began
+    // [END:JS-AMBIENT-CALIBRATION-STATE]
+    // [TAG:JS-FEEDBACK-HOLD-STATE] see [TAG:JS-FEEDBACK-HOLD] below
+    let lastFeedbackText  = null; // last warning text shown while an actual voiced attempt was happening
+    let lastFeedbackClass = null; // matching CSS class for lastFeedbackText
+    let lastFeedbackAt    = 0;    // Date.now() when lastFeedbackText was captured
+    const FEEDBACK_HOLD_MS = 2200; // how long to keep showing it after the voice drops back to silence
+    // [END:JS-FEEDBACK-HOLD-STATE]
 
     // Tracks completion by card `id` (stable string), not array index — so
     // inserting/reordering/adding cards in MODES_* later never mis-attributes
@@ -2925,10 +3116,21 @@
       const warn = $('level-warning');
       if (warn) { warn.textContent = ''; warn.className = 'level-warning'; }
       lZoneStart = null;
+      lastFeedbackText = null;
+      lastFeedbackClass = null;
+      lastFeedbackAt = 0;
     }
 
     function startLevelCycle() {
       lLevelIdx = 0;
+      // Kick off ambient-noise calibration: gating is suspended for the first
+      // AMBIENT_CALIBRATION_MS of audio (see updateAmbientCalibration below) so
+      // a running fan/AC gets measured as background instead of immediately
+      // being read as a passing "Тихо" attempt.
+      ambientLevel  = 0;
+      isCalibrating = true;
+      calibSamples  = [];
+      calibStartAt  = Date.now();
       const setMarker = document.createElement('div');
       setMarker.style.cssText = 'padding:5px 10px;font-size:0.65rem;font-family:monospace;' +
         'color:#00cfff;border-left:3px solid #00cfff;background:rgba(0,207,255,0.06);letter-spacing:0.05em;';
@@ -2963,6 +3165,53 @@
       renderCardL(true);
     }
 
+    // updateAmbientCalibration(micPercent): called instead of updateLevelMonitor
+    // while isCalibrating is true. Collects background samples (fan/AC/etc.)
+    // and shows a neutral "measuring" state on the meter/warning line so the
+    // person understands why nothing is being judged yet. Once
+    // AMBIENT_CALIBRATION_MS has elapsed, averages the samples into
+    // ambientLevel and flips isCalibrating off — normal gating resumes on the
+    // very next audio frame via updateLevelMonitor().
+    function updateAmbientCalibration(micPercent) {
+      calibSamples.push(micPercent);
+      const fill = $('level-meter-fill');
+      if (fill) { fill.style.width = '0%'; fill.className = 'level-meter-fill'; }
+      const warn = $('level-warning');
+      if (warn) {
+        warn.textContent = '⏳ Жди';
+        warn.className = 'level-warning show';
+      }
+      if (Date.now() - calibStartAt >= AMBIENT_CALIBRATION_MS) {
+        // Robust estimate: drop the very first sample (getUserMedia streams
+        // often produce one loud click/pop right as the stream opens — with
+        // only a handful of samples in the window, that single artifact could
+        // otherwise dominate the estimate), then take the median of what's
+        // left. Steady fan/AC noise is flat, so its median ≈ its true level;
+        // a stray click or a bit of early speech gets outvoted instead of
+        // dragging the estimate up.
+        const usable = calibSamples.length > 1 ? calibSamples.slice(1) : calibSamples;
+        const sorted = usable.slice().sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        let estimate = sorted.length ? sorted[mid] : 0;
+        // Hard cap: never let the measured background eat more than half of
+        // the "Тихо" ceiling — guarantees a usable gap always remains for an
+        // actual quiet voice, even if calibration still comes out too high.
+        estimate = Math.min(estimate, LEVELS_L[0].max / 2);
+        ambientLevel = estimate;
+        isCalibrating = false;
+        levelStartedAt = Date.now(); // level 0's lockout window starts now (see [TAG:JS-LEVEL-LOCKOUT])
+        needsRelease = true; // must observe silence before Тихо can register a pass
+        const rowText = 'Фон откалиброван: ' + ambientLevel.toFixed(1) + '% (порог «Тихо» ≥ ' +
+          Math.max(WHISPER_THRESHOLD, ambientLevel + AMBIENT_MARGIN).toFixed(1) + '%)';
+        logLines.push({ ts: '──', text: rowText, detected: false, kind: 'level' });
+        const row = document.createElement('div');
+        row.className = 'log-row noise';
+        row.innerHTML = `<span class="log-ts">──</span><span>${rowText}</span>`;
+        logList.appendChild(row);
+        requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
+      }
+    }
+
     // updateLevelMonitor(micPercent): called from inside onaudioprocess on every
     // audio frame while currentTaskSet === 'l' && isListening. Drives the live
     // meter, writes a continuous log row per frame (same density/spirit as the
@@ -2978,13 +3227,18 @@
       //              under (<WHISPER_THRESHOLD) = near-silence, prompt to say something.
       //   Средне (1): ok if Тихо.max < mic < Громко.min — two-sided, gap between neighbours.
       //   Громко (2): ok if mic ≥ Громко.min — only lower limit matters, no upper cap.
+      // effectiveWhisper: WHISPER_THRESHOLD floor, raised to clear the measured
+      // background (ambientLevel) by AMBIENT_MARGIN. This is what stops a
+      // steady fan/AC hum from satisfying "Тихо" on its own — see
+      // [TAG:JS-AMBIENT-CALIBRATION].
+      const effectiveWhisper = Math.max(WHISPER_THRESHOLD, ambientLevel + AMBIENT_MARGIN);
       let status;
       if (lLevelIdx === 0) {
         if (micPercent > LEVELS_L[0].max) status = 'over';  // too loud — only failure for Тихо
-        else if (micPercent < WHISPER_THRESHOLD) status = 'under'; // near-total silence
+        else if (micPercent < effectiveWhisper) status = 'under'; // near-total silence / just background noise
         else                              status = 'ok';    // any whisper passes
       } else if (lLevelIdx === 1) {
-        const lo = LEVELS_L[0].max;  // Тихо ceiling = Средне lower bound
+        const lo = Math.max(LEVELS_L[0].max, ambientLevel + AMBIENT_MARGIN);  // Тихо ceiling = Средне lower bound, also clamped above background
         const hi = LEVELS_L[2].min;  // Громко floor  = Средне upper bound
         if (micPercent <= lo)  status = 'under';
         else if (micPercent >= hi) status = 'over';
@@ -2993,6 +3247,58 @@
         status = micPercent < LEVELS_L[2].min ? 'under' : 'ok'; // no over for Громко
       }
       // [END:JS-LEVEL-STATUS-RULES]
+
+      // [TAG:JS-ZONE-HOLD] ────────────────────────────────────────────────
+      // Bug this fixes: the warning text used to say "✓ Так держать!" the
+      // instant a single audio frame landed in the target zone — but a
+      // level only actually counts as passed once it's been continuously
+      // in-zone for ZONE_HOLD_MS. Short sounds (a single "Р", a clipped
+      // syllable) can pop in and out of the zone in well under that time,
+      // so the person would see a "success" message for an attempt that
+      // was never actually credited. Moved here (computed once, right after
+      // status) so every downstream consumer — meter, warning text, log —
+      // agrees on whether this frame is "in zone, still holding" vs
+      // "actually just passed".
+      //
+      // [TAG:JS-LEVEL-LOCKOUT] Bug this also fixes: onaudioprocess's RMS is
+      // averaged over a whole ~256ms buffer. If someone starts speaking
+      // partway through a buffer — e.g. jumping straight to a medium/loud
+      // voice with no quiet lead-in — that one buffer mixes leading silence
+      // with the voice and can average out to a falsely LOW reading that
+      // satisfies "Тихо" by accident. The very next buffer then reads the
+      // real (sustained) volume correctly and can satisfy the next level too
+      // — two levels pass almost simultaneously from a single utterance.
+      // LEVEL_LOCKOUT_MS blocks any pass for a brief moment right after a
+      // level starts, so that one contaminated transition buffer can never
+      // register — only a genuinely sustained reading afterward can.
+      // [TAG:JS-LEVEL-RELEASE] ─────────────────────────────────────────────
+      // Bug this fixes: a rising voice naturally sweeps through lower
+      // loudness zones on its way up to a louder target within a single
+      // continuous utterance/breath (e.g. "йу" starting soft and swelling
+      // louder) — genuinely passing through 7% then 13% ~260ms apart, both
+      // real readings, not a windowing artifact. LEVEL_LOCKOUT_MS alone
+      // can't catch this because both readings are legitimate and spaced
+      // further apart than the lockout. The actual fix: require a real
+      // return to silence (below effectiveWhisper) before the newly-entered
+      // level is even eligible to pass — so the person has to stop, then
+      // make a fresh, deliberate attempt at the new target volume, instead
+      // of a single swelling breath being able to satisfy two levels.
+      if (needsRelease && micPercent <= effectiveWhisper) {
+        needsRelease = false;
+      }
+      // [END:JS-LEVEL-RELEASE]
+
+      let holdElapsedMs = 0;
+      let justPassed = false;
+      if (status === 'ok') {
+        if (!lZoneStart) lZoneStart = Date.now();
+        holdElapsedMs = Date.now() - lZoneStart;
+        const lockoutOver = (Date.now() - levelStartedAt) >= LEVEL_LOCKOUT_MS;
+        justPassed = lockoutOver && !needsRelease && (holdElapsedMs >= ZONE_HOLD_MS);
+      } else {
+        lZoneStart = null;
+      }
+      // [END:JS-ZONE-HOLD]
 
       // ── live meter: fill % + color ──────────────────────────────────────
       // [TAG:JS-LEVEL-METER-FORMULA]
@@ -3040,21 +3346,74 @@
       // [END:JS-LEVEL-METER-FORMULA]
 
       // ── live warning text ────────────────────────────────────────────────
+      // [TAG:JS-FEEDBACK-HOLD] ─────────────────────────────────────────────
+      // Bug this fixes (part 1 — freezing): the warning used to be driven
+      // straight off the live mic reading, so the second the person finished
+      // a syllable and the meter fell back toward zero, the "громче"/"тише"
+      // message vanished too — right as they were trying to read it, and
+      // right as they might just be pausing to take a breath. Now we only
+      // refresh the message from a "real" reading — one clearly above
+      // background (effectiveWhisper counts as "someone is making sound") —
+      // and freeze that text on screen for FEEDBACK_HOLD_MS once the mic
+      // drops back near silence, instead of instantly swapping to a generic
+      // silence prompt.
+      //
+      // Bug this fixes (part 2): only ever show two possible messages —
+      // "Тише" or "Громче" — telling the person which direction to correct
+      // in. Nothing is shown when they're already in the target zone or
+      // just passed the level: passing instantly advances to the next
+      // sound (this is a fast test, not a scored exercise), so there's
+      // nothing useful to read at that moment.
+      //
+      // Bug this fixes (part 3): when needsRelease is blocking a pass (see
+      // [TAG:JS-LEVEL-RELEASE]) — i.e. the mic IS in the target zone but
+      // won't be credited until the person pauses first — showing blank
+      // text (the normal "you're correct" state) is misleading: it looks
+      // like success but silently isn't. Show a short "pause" cue instead
+      // so it's clear something is still needed.
       const warn = $('level-warning');
+      const isVoiced = micPercent > effectiveWhisper;
+      const blockedByRelease = status === 'ok' && !justPassed && needsRelease;
       if (warn) {
-        if (status === 'ok') {
-          warn.textContent = '✓ Так держать!';
-          warn.className = 'level-warning ok';
+        let text, cls;
+        if (justPassed || (status === 'ok' && !blockedByRelease)) {
+          text = ''; cls = 'level-warning';
+        } else if (blockedByRelease) {
+          text = '⏸️ Пауза'; cls = 'level-warning show';
         } else if (status === 'over') {
-          warn.textContent = '⚠ ' + lvl.loudMsg;
-          warn.className = 'level-warning show';
+          text = lvl.loudMsg; cls = 'level-warning show';
         } else {
-          // under: for Тихо it means silence (< 0.5%), for others it means too quiet
-          const msg = (lLevelIdx === 0) ? lvl.silenceMsg : lvl.quietMsg;
-          warn.textContent = '⚠ ' + msg;
-          warn.className = 'level-warning show';
+          // under: too quiet for the current target (incl. near-total silence)
+          text = lvl.quietMsg; cls = 'level-warning show';
+        }
+
+        if (justPassed || (status === 'ok' && !blockedByRelease)) {
+          // Already correct — clear immediately, including any stale
+          // тише/громче still frozen from a moment ago.
+          warn.textContent = '';
+          warn.className = 'level-warning';
+          lastFeedbackText = null;
+          lastFeedbackClass = null;
+        } else if (isVoiced || blockedByRelease) {
+          // A real attempt is happening right now (wrong-direction, or
+          // correct-but-blocked-pending-pause) — show it live and remember it.
+          warn.textContent = text;
+          warn.className = cls;
+          lastFeedbackText = text;
+          lastFeedbackClass = cls;
+          lastFeedbackAt = Date.now();
+        } else if (lastFeedbackText && (Date.now() - lastFeedbackAt) < FEEDBACK_HOLD_MS) {
+          // Silence right now, but the last attempt's feedback is still
+          // fresh enough to be worth reading — keep it on screen unchanged.
+          warn.textContent = lastFeedbackText;
+          warn.className = lastFeedbackClass;
+        } else {
+          // Nothing attempted yet, or the hold window expired — no message.
+          warn.textContent = '';
+          warn.className = 'level-warning';
         }
       }
+      // [END:JS-FEEDBACK-HOLD]
 
       // GUARDED-NO-OPTIMIZE — if your task touches this block (the L-mode
       // continuous log row below), STOP and read the warning block at the
@@ -3071,29 +3430,25 @@
       const ts   = String(sec).padStart(4, '0') + '.' + frac;
       // [END:JS-L-LOG-TIMESTAMP]
       let logSuffix;
-      if (status === 'ok')    logSuffix = ' ✓ ПОПАДАНИЕ';
+      if (justPassed)         logSuffix = ' ✓ ПОПАДАНИЕ (зачтено)';
+      else if (status === 'ok')    logSuffix = ' — в зоне, удержание...';
       else if (status === 'over')  logSuffix = ' — слишком громко';
       else if (lLevelIdx === 0)    logSuffix = ' — тишина';
        else                         logSuffix = ' — тише нужного';
        const rowText = mc.sound.toUpperCase() + ' [' + lvl.label + '] ' + micPercent.toFixed(0) + '%' + logSuffix;
-       logLines.push({ ts, text: rowText, detected: status === 'ok', kind: 'level' });
+       logLines.push({ ts, text: rowText, detected: justPassed, kind: 'level' });
 
        const row = document.createElement('div');
-       row.className = 'log-row ' + (status === 'ok' ? 'detected' : 'noise');
+       row.className = 'log-row ' + (justPassed ? 'detected' : 'noise');
        row.innerHTML = `<span class="log-ts">${ts}</span><span>${rowText}</span>`;
        logList.appendChild(row);
        requestAnimationFrame(() => { logList.scrollTop = logList.scrollHeight; });
 
        // ── sustained in-zone hold → level passed ───────────────────────────
-       if (status === 'ok') {
-        if (!lZoneStart) lZoneStart = Date.now();
-        if (Date.now() - lZoneStart >= ZONE_HOLD_MS) {
-          lZoneStart = null;
-          const gen = sessionGen; // capture current generation by value
-          setTimeout(() => advanceLevel(gen), 0); // defer past this audio callback
-        }
-      } else {
+       if (justPassed) {
         lZoneStart = null;
+        const gen = sessionGen; // capture current generation by value
+        setTimeout(() => advanceLevel(gen), 0); // defer past this audio callback
       }
     }
 
@@ -3106,12 +3461,16 @@
         onSessionComplete();
       } else {
         playLevelPassSound(); // small reward blip — distinct from the full-card fanfare
+        levelStartedAt = Date.now(); // new level's lockout window starts now (see [TAG:JS-LEVEL-LOCKOUT])
+        needsRelease = true; // must hear silence before the new level can register a pass — see [TAG:JS-LEVEL-RELEASE]
         renderCardL(true); // refresh badges (mark previous level done) + reset meter
       }
     }
 
     function stopLevelCycle() {
       lZoneStart = null;
+      isCalibrating = false; // don't leave a stale calibration window armed for next Start
+      needsRelease = false;
     }
     // [END:JS-LEVEL-CYCLE]
 
@@ -3504,12 +3863,14 @@
       logList.innerHTML = '';
       // Also wipe the parallel audio recording so WAV and log stay in sync
       wavChunks = []; wavTotalSmp = 0; recStartTime = 0; recStopTime = 0; sessionStartTime = 0;
+      tabHiddenDuringRec = false;
       lastCardCompletedAt = 0;
       sessionStore[currentTaskSet] = emptySessionState(); // clear persisted copy too — only THIS set's buffer
       const dlBtn = $('btn-download-audio');
       dlBtn.disabled = true;
       dlBtn.classList.remove('btn-download-enabled');
       dlBtn.classList.add('btn-download-disabled');
+      updateDownloadIndicator();
     };
 
     $('btn-copy-log').onclick = () => {
@@ -3634,9 +3995,12 @@
         try {
           classifier = new EdgeImpulseClassifier();
           await classifier.init();
+          diagPush('Модель нейросети: загружена успешно');
         } catch (e) {
           statusEl.textContent = 'Ошибка модели: ' + e;
           statusEl.className = 'error';
+          diagPush('ОШИБКА загрузки модели: ' + e);
+          updateDownloadIndicator();
           throw e;
         }
 
@@ -3649,6 +4013,7 @@
         debugInfoEl.textContent = `freq=${window.MODEL_RATE} Hz | window=${window.NUM_SAMPLES} samples (${(window.NUM_SAMPLES/window.MODEL_RATE*1000).toFixed(0)} ms)`;
         debugInfoEl.textContent += '\nВерсия: ' + APP_VERSION;
         statusEl.textContent = 'Модель готова.';
+        updateDownloadIndicator();
       })();
       return modelLoadPromise;
     }
@@ -3839,59 +4204,210 @@
       dlBtn.disabled = false;
       dlBtn.classList.remove('btn-download-disabled');
       dlBtn.classList.add('btn-download-enabled');
+      updateDownloadIndicator();
     }
 
     function recStop() {
       recStopTime = Date.now();
     }
 
+    // [TAG:JS-DOWNLOAD-INDICATOR] ────────────────────────────────────────────
+    // Shows next to the download button whether the WAV will save cleanly.
+    // Model not being loaded no longer breaks the download (fallback SR),
+    // but it's still useful for the user to know, since it can indicate
+    // wider connectivity problems worth flagging.
+    function updateDownloadIndicator() {
+      const el = $('download-indicator');
+      if (!el) return;
+
+      // Checks that block/break downloading regardless of recording state —
+      // shown as soon as known, since they explain the problem even before
+      // the user tries to record anything.
+      if (!envCheck.blobDownload) {
+        el.textContent = '⛔ Браузер не поддерживает скачивание файлов таким способом. Попробуйте обновить браузер или использовать Chrome/Firefox/Safari последней версии.';
+        el.className = 'download-indicator warn';
+        return;
+      }
+      if (!envCheck.secureContext) {
+        el.textContent = '⛔ Страница открыта не по HTTPS (и не localhost) — микрофон и запись работать не будут.';
+        el.className = 'download-indicator warn';
+        return;
+      }
+      if (!envCheck.getUserMedia) {
+        el.textContent = '⛔ Браузер не поддерживает доступ к микрофону. Попробуйте другой браузер.';
+        el.className = 'download-indicator warn';
+        return;
+      }
+      if (micError) {
+        el.textContent = `⛔ Нет доступа к микрофону: ${micErrorText}`;
+        el.className = 'download-indicator warn';
+        return;
+      }
+
+      if (wavTotalSmp === 0) {
+        el.textContent = '';
+        el.className = 'download-indicator';
+        return;
+      }
+
+      // Rough memory sanity check: 4 bytes/sample (Float32) while recording,
+      // 2 bytes/sample more temporarily needed when encoding to 16-bit PCM.
+      // Warn well before browsers typically choke (varies, but budget for it).
+      const approxMB = (wavTotalSmp * 6) / (1024 * 1024);
+      if (approxMB > 500) {
+        el.textContent = `⚠️ Очень длинная запись (~${approxMB.toFixed(0)} МБ) — браузеру может не хватить памяти при сохранении. Рекомендуем скачать сейчас, не дожидаясь ещё большего размера.`;
+        el.className = 'download-indicator warn';
+        return;
+      }
+
+      if (tabHiddenDuringRec) {
+        el.textContent = '⚠️ Вкладка сворачивалась во время записи — часть звука могла не записаться. Проверьте файл после скачивания.';
+        el.className = 'download-indicator warn';
+        return;
+      }
+
+      if (window.MODEL_RATE) {
+        el.textContent = `✅ Готово к скачиванию (${window.MODEL_RATE} Hz)`;
+        el.className = 'download-indicator ok';
+      } else {
+        el.textContent = '⚠️ Модель нейросети не загрузилась — скачается с частотой 16000 Hz по умолчанию. Возможны проблемы с интернет-соединением.';
+        el.className = 'download-indicator warn';
+      }
+    }
+    // [END:JS-DOWNLOAD-INDICATOR]
+
+    let lastIndicatorUpdate = 0;
     function recCollect(samples) {
       // Called from onaudioprocess with resampled 16 kHz float32 samples [-1..1]
       wavChunks.push(new Float32Array(samples));
       wavTotalSmp += samples.length;
+      // Throttled: onaudioprocess fires several times per second, but the
+      // memory-size/tab-hidden warnings shown here change slowly — updating
+      // the DOM on every single audio buffer is unnecessary overhead over a
+      // long recording. Once per second is plenty.
+      const now = Date.now();
+      if (now - lastIndicatorUpdate > 1000) {
+        lastIndicatorUpdate = now;
+        updateDownloadIndicator();
+      }
     }
 
     function recDownloadWav() {
-      if (wavTotalSmp === 0) return;
-      // Encode all accumulated chunks to 16-bit mono PCM WAV
-      const buf  = new ArrayBuffer(44 + wavTotalSmp * 2);
-      const view = new DataView(buf);
-      const SR   = window.MODEL_RATE;
-      const ws   = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-      ws(0,  'RIFF');  view.setUint32(4,  36 + wavTotalSmp * 2, true);
-      ws(8,  'WAVE');  ws(12, 'fmt ');
-      view.setUint32(16, 16, true);   // fmt chunk size
-      view.setUint16(20, 1,  true);   // PCM
-      view.setUint16(22, 1,  true);   // mono
-      view.setUint32(24, SR, true);   // sample rate
-      view.setUint32(28, SR * 2, true); // byte rate
-      view.setUint16(32, 2,  true);   // block align
-      view.setUint16(34, 16, true);   // bits per sample
-      ws(36, 'data'); view.setUint32(40, wavTotalSmp * 2, true);
-      let off = 44;
-      for (const chunk of wavChunks) {
-        for (let i = 0; i < chunk.length; i++) {
-          const s = Math.max(-1, Math.min(1, chunk[i]));
-          view.setInt16(off, Math.round(s * 32767), true);
-          off += 2;
-        }
+      diagPush(`Нажата «Скачать аудио» — wavTotalSmp=${wavTotalSmp}, chunks=${wavChunks.length}, currentTaskSet=${currentTaskSet}`);
+      if (wavTotalSmp === 0) {
+        diagPush('Скачивание аудио: остановлено — записи нет (wavTotalSmp=0)');
+        return;
       }
-      const blob = new Blob([buf], { type: 'audio/wav' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url;
-      a.download = getFilenamePrefix() + '_' + new Date(lastCardCompletedAt || Date.now()).toISOString().slice(0,19).replace(/:/g,'-') + '.wav';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000); // free blob memory after browser starts download
-      // Do NOT wipe wavChunks/wavTotalSmp — keep intact so user can re-download.
-      // Recording state is only cleared on new session start (recStart if recStartTime===0)
-      // or when the user clicks "Очистить" (btn-clear-log).
+      try {
+        // Encode all accumulated chunks to 16-bit mono PCM WAV
+        const buf  = new ArrayBuffer(44 + wavTotalSmp * 2);
+        diagPush(`Шаг 1/6: ArrayBuffer выделен (${buf.byteLength} байт)`);
+        const view = new DataView(buf);
+        const SR   = window.MODEL_RATE || 16000; // fallback: recording is always resampled to 16kHz,
+                                                  // so this stays correct even if the model never loaded
+        const ws   = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+        ws(0,  'RIFF');  view.setUint32(4,  36 + wavTotalSmp * 2, true);
+        ws(8,  'WAVE');  ws(12, 'fmt ');
+        view.setUint32(16, 16, true);   // fmt chunk size
+        view.setUint16(20, 1,  true);   // PCM
+        view.setUint16(22, 1,  true);   // mono
+        view.setUint32(24, SR, true);   // sample rate
+        view.setUint32(28, SR * 2, true); // byte rate
+        view.setUint16(32, 2,  true);   // block align
+        view.setUint16(34, 16, true);   // bits per sample
+        ws(36, 'data'); view.setUint32(40, wavTotalSmp * 2, true);
+        diagPush(`Шаг 2/6: заголовок WAV записан (SR=${SR}, sampleRateSource=${window.MODEL_RATE ? 'модель' : 'дефолт'})`);
+        let off = 44;
+        for (const chunk of wavChunks) {
+          for (let i = 0; i < chunk.length; i++) {
+            const s = Math.max(-1, Math.min(1, chunk[i]));
+            view.setInt16(off, Math.round(s * 32767), true);
+            off += 2;
+          }
+        }
+        diagPush(`Шаг 3/6: сэмплы закодированы (записано байт: ${off - 44} из ${wavTotalSmp * 2} ожидаемых)`);
+        const blob = new Blob([buf], { type: 'audio/wav' });
+        diagPush(`Шаг 4/6: Blob создан (size=${blob.size} байт, type=${blob.type})`);
+        const url  = URL.createObjectURL(blob);
+        diagPush(`Шаг 5/6: Object URL создан (${url.slice(0, 30)}...)`);
+        const a    = document.createElement('a');
+        a.href = url;
+        a.download = getFilenamePrefix() + '_' + new Date(lastCardCompletedAt || Date.now()).toISOString().slice(0,19).replace(/:/g,'-') + '.wav';
+        diagPush(`Шаг 6/6: имя файла — "${a.download}", download-атрибут поддержан: ${'download' in a}`);
+        document.body.appendChild(a);
+        a.click();
+        diagPush('anchor.click() вызван — с точки зрения JS это последний доступный шаг: дальше файл принимает браузер/ОС (диалог сохранения, папка загрузок, антивирус и т.п.), и JS не может узнать, сохранился ли файл фактически на диск.');
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000); // free blob memory after browser starts download
+        // Do NOT wipe wavChunks/wavTotalSmp — keep intact so user can re-download.
+        // Recording state is only cleared on new session start (recStart if recStartTime===0)
+        // or when the user clicks "Очистить" (btn-clear-log).
+        diagPush(`Скачивание аудио: JS-код отработал без ошибок до конца (SR=${SR}Hz, samples=${wavTotalSmp})`);
+      } catch (e) {
+        diagPush('ОШИБКА скачивания аудио: ' + (e && e.stack ? e.stack : e));
+        statusEl.textContent = 'Ошибка скачивания аудио: ' + e.message;
+        statusEl.className = 'error';
+      }
     }
 
     $('btn-download-audio').onclick = recDownloadWav;
     // [END:JS-RECORDER]
+
+    // [TAG:JS-DIAG-PANEL] ────────────────────────────────────────────────────
+    // Toggle diagnostics panel, fill with current diagLog + live state snapshot,
+    // and let the user copy it to send back for troubleshooting.
+    $('btn-diag-toggle').onclick = () => {
+      const panel = $('diag-panel');
+      const showing = panel.style.display !== 'none';
+      if (showing) {
+        panel.style.display = 'none';
+        return;
+      }
+      const snapshot = [
+        '=== ДИАГНОСТИКА R-PHONEME ===',
+        'Это автосгенерированный лог из приложения r-phoneme (lexbayart/r-phoneme).',
+        `Формат лога: ${DIAG_BUILD}`,
+        'Если этот текст прислан в новом чате без прежнего контекста: ниже — сначала',
+        'снимок текущего состояния приложения, затем хронологический лог событий,',
+        'включая пошаговую трассировку последней попытки скачивания аудио (см. строки',
+        '«Шаг 1/6» … «Шаг 6/6»). Если трассировка доходит до "anchor.click() вызван"',
+        'без ошибки после — значит JS-код отработал полностью корректно, и файл был',
+        'передан браузеру/ОС для сохранения. В этом случае проблема лежит ВНЕ',
+        'досягаемости JS (диалог сохранения браузера, папка загрузок, антивирус,',
+        'нехватка места на диске) — это единственные оставшиеся кандидаты.',
+        '',
+        '=== СНИМОК СОСТОЯНИЯ ===',
+        `Версия приложения: ${APP_VERSION}`,
+        `Secure context (HTTPS/localhost): ${envCheck.secureContext}`,
+        `getUserMedia поддерживается: ${envCheck.getUserMedia}`,
+        `Blob-скачивание поддерживается: ${envCheck.blobDownload}`,
+        `Последняя ошибка микрофона: ${micError || '—'}${micErrorText ? ' (' + micErrorText + ')' : ''}`,
+        `Вкладка сворачивалась во время записи: ${tabHiddenDuringRec}`,
+        `Модель загружена: ${!!window.MODEL_RATE}`,
+        `MODEL_RATE: ${window.MODEL_RATE || '—'}`,
+        `NUM_SAMPLES: ${window.NUM_SAMPLES || '—'}`,
+        `Набор заданий: ${currentTaskSet}`,
+        `Записано сэмплов (wavTotalSmp): ${wavTotalSmp} (~${((wavTotalSmp*6)/(1024*1024)).toFixed(1)} МБ)`,
+        `Идёт запись: ${isListening}`,
+        '',
+        '=== ЛОГ СОБЫТИЙ (хронологически) ===',
+        ...diagLog
+      ].join('\n');
+      $('diag-text').value = snapshot;
+      panel.style.display = 'flex';
+    };
+
+    $('btn-diag-copy').onclick = () => {
+      const btn = $('btn-diag-copy');
+      navigator.clipboard.writeText($('diag-text').value).then(() => {
+        btn.textContent = '✓ Скопировано!';
+        setTimeout(() => { btn.textContent = '📋 Скопировать лог'; }, 1500);
+      }).catch(() => {
+        btn.textContent = 'Ошибка копирования';
+        setTimeout(() => { btn.textContent = '📋 Скопировать лог'; }, 1500);
+      });
+    };
+    // [END:JS-DIAG-PANEL]
 
     // [TAG:JS-START-STOP] ──────────────────────────────────────────────────
     async function startListening() {
@@ -3924,10 +4440,17 @@
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         });
+        micError = null;
+        micErrorText = '';
       } catch (e) {
         isListening = false;
-        statusEl.textContent = 'Нет доступа к микрофону: ' + e.message;
+        const humanMsg = micErrorMessage(e);
+        statusEl.textContent = 'Нет доступа к микрофону: ' + humanMsg;
         statusEl.className = 'error';
+        diagPush('ОШИБКА доступа к микрофону: ' + e.name + ' — ' + e.message);
+        micError = e.name || 'ошибка';
+        micErrorText = humanMsg;
+        updateDownloadIndicator();
         return;
       }
 
@@ -3951,7 +4474,10 @@
         for (let s of raw) rms += s * s;
         const micPercent = Math.min(Math.sqrt(rms / raw.length) * 500, 100);
         micLevel.style.width = micPercent + '%';
-        if (isLevelModeCard() && isListening) updateLevelMonitor(micPercent);
+        if (isLevelModeCard() && isListening) {
+          if (isCalibrating) updateAmbientCalibration(micPercent);
+          else updateLevelMonitor(micPercent);
+        }
 
         const samples = nativeRate === window.MODEL_RATE ? raw : resample(raw, nativeRate, window.MODEL_RATE);
         // [TAG:JS-RINGBUFFER] ────────────────────────────────────────────────
@@ -4074,6 +4600,7 @@
     // loading, blocked by the startListening() guard) by the time a profile is picked.
     seedDemoUsersIfNeeded();
     loadModel();
+    updateDownloadIndicator();
     renderLanding();
   })();
   </script>
